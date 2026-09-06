@@ -1,0 +1,27 @@
+{
+  "prospect_id": "P01",
+  "company": "Zerodha Varsity",
+  "contact_name": "Kartik",
+  "email": "kartik@example.com",
+  "segment": "fintech",
+  "notes": "finance-education angle",
+  "synthetic": true,
+  "note": "Placeholder excerpt text written by hand. Replace with a real frozen fetch (python runner.py --freeze P01) before quoting eval numbers anywhere.",
+  "sources": [
+    {
+      "url": "https://varsity.zerodha.com/about/",
+      "title": "About Varsity - Zerodha",
+      "text": "Varsity is a free stock market education initiative from Zerodha. The modules cover everything from the basics of the Indian markets to technical analysis, fundamental analysis, futures, options, risk management and personal finance. All modules are open, free to read, and available on the web and as a mobile app. Varsity was built because most market education in India was either expensive or sold as a shortcut to profits. The content is written in plain language and organised as a sequence of chapters, with each chapter ending in a short summary of the key ideas. Over the years Varsity has grown into one of the most widely read finance curricula in the country, and it is used by college students, first-time investors and trainee analysts. Varsity also runs a certification track and publishes a regular series of explainers on market structure."
+    },
+    {
+      "url": "https://zerodha.com/z-connect/campus-and-community",
+      "title": "Campus and community programmes",
+      "text": "Beyond Varsity, the team supports learning communities directly. Volunteers have taken Varsity sessions to college campuses across India, covering how markets work, what a trading account actually does, and how to read a company annual report. The team has also supported student finance clubs with content and speakers, and has previously partnered with campus finance festivals to run market simulation games for participants who had never placed a trade before. Requests from student groups are handled by the community team, who ask for the audience size, the format, and how the session will be recorded and shared afterwards."
+    }
+  ],
+  "expect": {
+    "thin": false,
+    "min_sources": 2,
+    "specificity_tokens": ["varsity", "modules", "curriculum", "campus", "market"]
+  }
+}

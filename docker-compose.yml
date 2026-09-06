@@ -1,0 +1,14 @@
+# docker compose up -d      -> `python run.py serve` stays up, buttons work
+# docker compose run --rm sponsy python run.py doctor
+# docker compose run --rm sponsy python run.py run --limit 3
+#
+# ./data holds the database, the outbox, event.yml, voice.yml and the Gmail
+# token, so it is the only thing that has to survive a rebuild. Run
+# `python run.py gmail-auth` on the host first: the OAuth flow opens a browser.
+services:
+  sponsy:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

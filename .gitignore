@@ -1,0 +1,33 @@
+.env
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/outbox/*
+!data/outbox/.gitkeep
+# real event and voice configs carry a phone number and personal writing samples
+data/event.yml
+data/voice.yml
+data/prospects.local.csv
+# Gmail OAuth client and token
+data/gmail_credentials.json
+data/gmail_token.json
+evals/results/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.idea/
+.vscode/
+
+# ---- personal data: never publish -------------------------------------------
+# The merged prospect sheet carries ~500 named individuals with job titles,
+# phone numbers and LinkedIn URLs, scraped from sponsor lists. Publishing it
+# is a personal-data dump, and it is also the club's own pipeline. Regenerate
+# it locally with: python tools/ingest_lists.py
+data/prospects.ranked.csv
+data/prospects.*.csv
+!data/prospects.csv
+# rendered email preview -- carries the organiser's phone number
+preview.html
+*.eml

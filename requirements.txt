@@ -1,0 +1,19 @@
+# core -- everything else is optional and imported lazily
+requests>=2.31
+PyYAML>=6.0
+
+# Gmail API delivery + reply polling (MAIL_PROVIDER=gmail_api). Skip these if
+# you only use SMTP with an app password.
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
+google-auth-httplib2>=0.2
+
+# Anthropic models (LLM_PROVIDER=anthropic). Gemini and OpenAI-compatible
+# providers use plain HTTP and need nothing extra.
+anthropic>=0.40
+
+# nice-to-have
+pyperclip>=1.8          # clipboard copy on manual delivery
+
+# tests
+pytest>=7.4

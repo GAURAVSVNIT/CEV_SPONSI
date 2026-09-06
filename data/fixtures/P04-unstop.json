@@ -1,0 +1,28 @@
+{
+  "prospect_id": "P04",
+  "company": "Unstop",
+  "contact_name": "Priya",
+  "email": "priya@example.com",
+  "segment": "edtech",
+  "notes": "hosts campus competitions; likely warmest lead",
+  "synthetic": true,
+  "note": "Placeholder excerpt text written by hand. Replace with a real frozen fetch before quoting eval numbers.",
+  "sources": [
+    {
+      "url": "https://unstop.com/about",
+      "title": "About Unstop",
+      "text": "Unstop is a platform where students find competitions, hackathons, case challenges, quizzes and internships, and where companies run those opportunities to reach campus talent. Colleges use it to host their own events and manage registrations, submissions and results in one place. The platform is built around the idea that competitions are a better signal of ability than a resume alone."
+    },
+    {
+      "url": "https://unstop.com/blog/campus-partnerships",
+      "title": "How campus partnerships work",
+      "text": "Unstop has sponsored and co-hosted college competitions, including case challenges run by student clubs, and provides hosting, registration handling and promotion to its user base in exchange for branding on the event. The partnerships team asks organisers for expected registrations, the judging format and the timeline before committing. Events that publish their results and share participant feedback are prioritised for repeat partnerships in the following year."
+    }
+  ],
+  "expect": {
+    "thin": false,
+    "min_sources": 2,
+    "prior_sponsorship_expected": true,
+    "specificity_tokens": ["competitions", "case", "campus", "registrations", "hosting"]
+  }
+}

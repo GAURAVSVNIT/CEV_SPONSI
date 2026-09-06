@@ -1,0 +1,61 @@
+# How the sender actually writes. This is what makes the emails sound like a
+# person and not like a model. Copy to data/voice.yml (gitignored) and make it
+# true for you -- the drafter imitates it, and the lint checks against it.
+
+sender_name: Your Name
+sender_role: Sponsorship Lead
+club: ACM, SVNIT Surat
+
+# Salutation template. {first} = contact's first name, {team} = "team" when we
+# only have a role mailbox.
+greeting: "Hi {first},"
+
+# Exactly how you sign off, as you would type it. Keep it short.
+signoff: |
+  Thanks,
+  Your Name
+  Sponsorship Lead, ACM SVNIT
+
+# Hard ceiling on body length. 120 is a good default for a cold email.
+max_words: 130
+
+# Notes the drafter follows. Write them the way you would brief a friend who
+# is emailing on your behalf.
+tone_notes:
+  - Direct. The first sentence after the greeting is about them, not us.
+  - Contractions are fine ("we're", "I'd"). Nobody says "we would like to".
+  - One ask, one number. Don't list every tier.
+  - No exclamation marks. No "excited". No "hope this finds you well".
+  - It's okay to sound like a student. We are students.
+  - End with a question or a concrete next step, not "looking forward to hearing from you".
+
+# Words and phrasings you actually use. The drafter may borrow them.
+phrases_i_use:
+  - "quick one"
+  - "happy to send the deck"
+  - "does that fit?"
+  - "we'd love to have you"
+
+# Things you would never write. Lint flags them; the humanizer removes them.
+phrases_i_avoid:
+  - "I hope this email finds you well"
+  - "I'm reaching out"
+  - "synergy"
+  - "leverage"
+  - "mutually beneficial"
+  - "esteemed"
+
+# Up to three emails you genuinely wrote (any topic). These are the strongest
+# signal the drafter gets. Paste them verbatim, typos and all.
+sample_emails:
+  - |
+    Hi Priya,
+
+    Quick one -- we're running DotSlash again in Feb and your team ran that API
+    workshop last year that people still talk about. Would you be up for doing
+    it again? We can give you the opening slot on day one.
+
+    Happy to send the deck if it helps.
+
+    Thanks,
+    Your Name

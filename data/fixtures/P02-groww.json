@@ -1,0 +1,27 @@
+{
+  "prospect_id": "P02",
+  "company": "Groww",
+  "contact_name": "Neha",
+  "email": "neha@example.com",
+  "segment": "fintech",
+  "notes": "large student user base",
+  "synthetic": true,
+  "note": "Placeholder excerpt text written by hand. Replace with a real frozen fetch before quoting eval numbers.",
+  "sources": [
+    {
+      "url": "https://groww.in/about-us",
+      "title": "About Groww",
+      "text": "Groww is an investment platform that lets people in India invest in mutual funds, stocks, exchange traded funds and fixed deposits from a single app. The company was started to make investing simple for first-time investors, and a large share of the user base opened their first investment account on the platform. The product team writes explainer content on how mutual funds work, what an expense ratio is, and how to read a fund factsheet, because most new users arrive without any prior exposure to markets."
+    },
+    {
+      "url": "https://groww.in/blog/learning-and-campus",
+      "title": "Learning, and how we work with campuses",
+      "text": "The learning team publishes a beginner series aimed at people in their late teens and early twenties, many of whom are still in college when they make their first investment. Groww has run sessions with student groups on personal finance basics: budgeting on a stipend, what an index fund is, and why timing the market is a poor plan. The team says campus requests are frequent and are prioritised where the audience is large and the session is recorded, so that the material outlives the event itself."
+    }
+  ],
+  "expect": {
+    "thin": false,
+    "min_sources": 2,
+    "specificity_tokens": ["mutual", "investing", "beginner", "campus", "first-time"]
+  }
+}

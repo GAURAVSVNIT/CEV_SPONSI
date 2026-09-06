@@ -1,0 +1,23 @@
+{
+  "prospect_id": "P05",
+  "company": "Meridian Analytics",
+  "contact_name": "Sameer",
+  "email": "sameer@example.com",
+  "segment": "consulting",
+  "notes": "small firm, almost nothing online",
+  "synthetic": true,
+  "note": "The deliberately thin case. A fictional firm with one uninformative page. Correct behaviour is a shorter, vaguer draft flagged low-confidence -- NOT a confident invented one. This is the case that proves the groundedness rule works, so keep it in the set even after you freeze real sources for the others.",
+  "sources": [
+    {
+      "url": "https://meridian-analytics.example.com/",
+      "title": "Meridian Analytics",
+      "text": "Meridian Analytics is a consulting firm working with clients across sectors. We deliver insight-led engagements from our offices in Pune. Contact us to discuss your requirements."
+    }
+  ],
+  "expect": {
+    "thin": true,
+    "min_sources": 1,
+    "max_claims": 1,
+    "specificity_tokens": ["consulting", "pune", "analytics"]
+  }
+}

@@ -1,0 +1,80 @@
+# Everything the drafter is allowed to say about US.
+#
+# The model asserts every line below as fact, and the verifier treats these as
+# grounded by construction. So: if it is not true, do not put it here.
+#
+# Copy to data/event.yml (gitignored) and edit.
+
+event_name: DotSlash 10.0
+date: 20-21 February 2027
+summary: >-
+  The 10th edition of ACM SVNIT's flagship 36-hour national-level hackathon,
+  organised annually with ASHINE Research Park, SVNIT Surat. One of Gujarat's
+  largest hackathons.
+colleges: >-
+  Student innovators from across India; DotSlash 9.0 drew applications from
+  600+ colleges across 25+ states.
+
+# Where the event is. Used to anchor prospect discovery ("hackathon sponsors
+# Gujarat", "NIT tech fest sponsors India") -- generic queries return generic
+# companies.
+city: Surat
+region: Gujarat
+country: India
+kind: hackathon                  # hackathon | tech fest | case competition | conference
+
+currency: USD
+
+# Verified facts about past editions. The drafter may cite these and nothing
+# else about us.
+track_record:
+  - 9 successful editions completed before DotSlash 10.0
+  - DotSlash 9.0 recorded 1,750+ applications from 600+ colleges across 25+ states
+  - DotSlash 9.0 achieved 50K+ social media engagements and 100K+ website impressions
+  - Run with ASHINE Research Park, SVNIT Surat
+  - 36 hours of continuous building, with real-world problem statements
+
+# Progress facts the follow-up touches may cite. Keep them true.
+registrations_so_far: 0
+confirmed_sponsors: []
+
+# Sponsorship packages. Amounts are asserted as fact.
+tiers:
+  - name: Alpha
+    amount: 750
+    deliverables:
+      - access to attendee LinkedIn and GitHub profiles
+      - attendee resume book
+      - mentor invite and an opening ceremony speech
+      - host a workshop
+      - present a challenge and prize
+      - judge at the project showcase
+      - logo on the website, presentations and T-shirts
+  - name: Beta
+    amount: 500
+    deliverables:
+      - attendee resume book
+      - host a workshop
+      - present a challenge and prize
+      - judge at the project showcase
+      - logo on the website, presentations and T-shirts
+  - name: Gamma
+    amount: 250
+    deliverables:
+      - attendee resume book
+      - present a challenge and prize
+      - logo on the website, presentations and T-shirts
+  - name: Delta
+    amount: 100
+    deliverables:
+      - attendee resume book
+      - sponsor shout-outs
+      - logo on the website and the marketing banner
+
+# The sender. voice.yml can override name/role and adds how they write.
+sender_name: Your Name
+sender_role: Sponsorship Lead
+club: ACM, SVNIT Surat
+reply_to: you@example.org
+phone: "+91 00000 00000"
+website: https://www.hackatdotslash.co.in

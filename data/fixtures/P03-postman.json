@@ -1,0 +1,27 @@
+{
+  "prospect_id": "P03",
+  "company": "Postman",
+  "contact_name": "Arjun",
+  "email": "arjun@example.com",
+  "segment": "devtools",
+  "notes": "runs a student programme",
+  "synthetic": true,
+  "note": "Placeholder excerpt text written by hand. Replace with a real frozen fetch before quoting eval numbers.",
+  "sources": [
+    {
+      "url": "https://www.postman.com/company/about-postman/",
+      "title": "About Postman",
+      "text": "Postman is an API platform used by developers to design, test, document and monitor APIs. Teams use it to share collections of requests, mock endpoints before a backend exists, and run automated tests against APIs in continuous integration. The platform grew out of a side project built to make testing HTTP requests less tedious, and is now used across engineering teams of every size."
+    },
+    {
+      "url": "https://www.postman.com/student-program/",
+      "title": "Postman Student Programme",
+      "text": "The student programme gives learners free access to Postman and a structured path through the fundamentals of APIs: what a request is, how authentication works, and how to document an API so someone else can use it. Students who complete the track receive a certificate they can put on a resume. The programme also supports student leaders who run API workshops on their own campuses, providing slides, sample collections and swag for attendees. Applications are open to anyone enrolled at a recognised institution."
+    }
+  ],
+  "expect": {
+    "thin": false,
+    "min_sources": 2,
+    "specificity_tokens": ["api", "student", "workshops", "certificate", "collections"]
+  }
+}

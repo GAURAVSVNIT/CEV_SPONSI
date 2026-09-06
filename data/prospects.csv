@@ -1,0 +1,23 @@
+prospect_id,company,contact_name,email,segment,status,last_touch,thread_id,notes
+DS01,Postman,,,devtools,new,,,runs a student programme and campus API workshops; classic challenge-prize sponsor
+DS02,MongoDB,,,cloud,new,,,MongoDB for Startups gives Atlas credits; sponsors hackathons for 'best use of Atlas'
+DS03,Twilio,,,devtools,new,,,long-running hackathon sponsor; 'best use of Twilio' challenge fits the challenge-and-prize deliverable
+DS04,JetBrains,,,devtools,new,,,"free student licences already; licence keys are cheap swag for them, high value to participants"
+DS05,GitHub,,,devtools,new,,,Student Developer Pack and Campus programme; strongest brand pull with participants
+DS06,DigitalOcean,,,cloud,new,,,Hatch programme; credits-based sponsorship is their normal motion
+DS07,Cloudflare,,,cloud,new,,,Workers platform is dev-first; wants student developers building on it
+DS08,Vercel,,sponsorships@vercel.com,devtools,new,,,deployment platform with a large student community; sponsorships@ address published on their own community forum
+DS09,Replit,,,devtools,new,,,education-first product; hackathons are their core channel
+DS10,BrowserStack,,,devtools,new,,,"Indian, hires from NITs; testing tools are directly useful during a 36-hour build"
+DS11,Hugging Face,,,ai,new,,,community-led; a model or dataset challenge is a natural fit
+DS12,Groq,,,ai,new,,,fast inference; wants developers trying the API on real projects
+DS13,Sarvam AI,,,ai,new,,,Indian AI lab building for Indian languages; strong student-community angle
+DS14,Razorpay,,,fintech,new,,,payments API; runs its own campus programmes and hires engineers from NITs
+DS15,Zoho,,,saas,new,,,"serious campus hiring story, including non-metro colleges"
+DS16,Freshworks,,,saas,new,,,Chennai-based SaaS; campus recruiting pipeline
+DS17,Zerodha,,,fintech,new,,,funds tech and education initiatives; Varsity and Rainmatter both engage students
+DS18,Devfolio,,,community,new,,,hackathon infrastructure company; likeliest warm lead and a possible platform partner
+DS19,Unstop,,,edtech,new,,,hosts campus competitions; has co-hosted and sponsored college events before
+DS20,Polygon,,,web3,new,,,funds student hackathons heavily and sponsors bounty tracks
+DS21,SashiDo,,,devtools,new,,,"SPONSORED DOTSLASH 4.0 - listed on acm-svnit.github.io/DotSlash4.0; backend-as-a-service, warm reconnect angle"
+DS22,echoAR,,,devtools,new,,,"SPONSORED DOTSLASH 4.0 - listed on acm-svnit.github.io/DotSlash4.0; AR/VR cloud platform, warm reconnect angle"
