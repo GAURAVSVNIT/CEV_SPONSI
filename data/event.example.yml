@@ -78,3 +78,12 @@ club: ACM, SVNIT Surat
 reply_to: you@example.org
 phone: "+91 00000 00000"
 website: https://www.hackatdotslash.co.in
+
+# What is genuinely new about this edition. ONLY the returning-sponsor email
+# uses it: a company that already backed DotSlash does not need the pitch, it
+# needs a reason to come back, and "we are running it again" is a weak one.
+# Leave it blank and the drafter is told to lean on the edition number rather
+# than invent a change -- an invented one is worse than none.
+#   e.g. "A hardware track with ASHINE's lab, and the prize pool has doubled."
+whats_new: ""
+

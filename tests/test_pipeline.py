@@ -447,3 +447,51 @@ def test_the_checks_survive_a_round_trip_through_the_database(db, prospect,
     detail = json.loads(row["checks"])
     assert "checks" in detail and "lint" in detail
     assert approve.draft_message(row)
+
+
+def test_research_stamped_ahead_of_the_job_is_not_refetched(cfg, db, notifier, event,
+                                                            voice, prospect, run_job):
+    """save_research stamps created_at in UTC; the job compares it against a
+    local date. Anywhere west of Greenwich the stamp can read as tomorrow, and
+    a negative age used to count as stale -- so every prospect was researched
+    again on every run, which is precisely the free-tier burn RESEARCH_TTL_DAYS
+    exists to prevent. Research from the future is new, not old.
+
+    The stamp is set explicitly rather than left to the wall clock: this has to
+    keep testing the skew on every future day the suite is ever run.
+    """
+    run_job(limit=1)
+    approve.register(event, voice, TODAY)
+    approvals.apply_verdict(cfg, db, notifier,
+                            "d:{}:skip".format(store.pending_drafts(db)[0]["id"]))
+    after_first = _fetches(db)
+    assert after_first > 0
+
+    ahead = (TODAY + timedelta(days=10)).isoformat() + "T07:00:00+00:00"
+    db.execute("UPDATE research_summary SET created_at=?", (ahead,))
+
+    # the skipped prospect is due again three days on, seven days "before"
+    # the research was stamped
+    run_job(today=TODAY + timedelta(days=3), limit=1)
+    assert store.pending_drafts(db), "the skipped prospect should come back"
+    assert _fetches(db) == after_first, "a stamp from the future counted as stale"
+
+
+def test_genuinely_old_research_is_still_refetched(cfg, db, notifier, event, voice,
+                                                   prospect, run_job):
+    """The other side of that fix: tolerating a future stamp must not turn the
+    TTL off. What a company said about its student programme in January is not
+    evidence in December."""
+    from sponsy.job import RESEARCH_TTL_DAYS
+
+    run_job(limit=1)
+    approve.register(event, voice, TODAY)
+    approvals.apply_verdict(cfg, db, notifier,
+                            "d:{}:skip".format(store.pending_drafts(db)[0]["id"]))
+    after_first = _fetches(db)
+
+    stale = (TODAY - timedelta(days=RESEARCH_TTL_DAYS + 5)).isoformat() + "T07:00:00+00:00"
+    db.execute("UPDATE research_summary SET created_at=?", (stale,))
+
+    run_job(today=TODAY + timedelta(days=3), limit=1)
+    assert _fetches(db) > after_first, "stale research was reused"

@@ -423,8 +423,11 @@ def check_brochure(cfg: Config) -> Check:
                      "fix or replace {}; until then nothing is attached".format(path),
                      optional=True)
     size = path.stat().st_size
+    kinds = list(ATTACH_KINDS)
+    named = (" and ".join(kinds) if len(kinds) < 3
+             else "{} and {}".format(", ".join(kinds[:-1]), kinds[-1]))
     return Check("brochure", True, "{} ({:.1f} MB), attached to the {} email(s)"
-                 .format(path.name, size / 1048576, " and ".join(ATTACH_KINDS)))
+                 .format(path.name, size / 1048576, named))
 
 
 def check_mail(cfg: Config, live: bool = True) -> Check:

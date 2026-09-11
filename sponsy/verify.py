@@ -30,7 +30,23 @@ MAX_WORDS = 260
 MIN_WORDS = 25
 # One of these has to appear, or the email never actually asks for anything.
 ASK_WORDS = ("sponsor", "partner", "back us", "backing us", "your support",
-             "support us")
+             "support us",
+             # A returning email phrases the ask as a return, not a proposal:
+             # "we want to invite you to support this edition", "we'd like to
+             # have you back". The first live returning draft asked plainly and
+             # was rejected because none of the words above appear in it, which
+             # is the check being wrong rather than the email.
+             "to support", "support this", "support the", "support our",
+             "have you back", "welcome you back", "come back", "join us again",
+             "be part of", "on board")
+# A `returning` email whose whole premise is the existing relationship has to
+# actually refer to it. If the model writes a cold pitch under this kind, the
+# recipient gets "hello, we are ACM SVNIT" with their own logo on our site --
+# the exact failure the variant exists to prevent -- so this is a hard check.
+RETURNING_WORDS = ("again", "back", "previous", "last year", "past edition",
+                   "earlier edition", "before", "returning", "renew",
+                   "supported us", "sponsored us", "backed us", "worked with",
+                   "9.0", "ninth", "last edition", "since then")
 PLACEHOLDER = re.compile(r"\[|\{|XYZ|TODO|Lorem|<insert", re.I)
 FILLER = (
     "hope this email finds you well",
@@ -249,8 +265,13 @@ def verify_draft(draft, excerpts, event, cfg=None, llm=None, company: str = "",
         "claims_traceable": all(c["grounded"] for c in claim_results),
         "no_superlatives": not any(s in low for s in SUPERLATIVES),
         "greets_our_contact": greet_ok,
+        # `returning` joins the exempt list: its hook is our own record of the
+        # relationship, not anything research turned up, so a returning email
+        # with no claims about the company is correct rather than lazy.
         "has_claims": bool(draft.claims) or kind in ("last_touch", "needs_info",
-                                                     "nudge"),
+                                                     "nudge", "returning"),
+        "mentions_relationship": (kind != "returning"
+                                  or any(w in low for w in RETURNING_WORDS)),
         "not_empty": len(body.split()) >= MIN_WORDS,
         "sounds_human": lint.score >= humanize.PASS_SCORE,
         # Not a style question: we are asking a company for a favour, so
@@ -311,6 +332,9 @@ def failure_feedback(detail: dict) -> str:
                          '"{}"'.format(p) for p in pressure)))
     if not checks["has_claims"]:
         lines.append("- You must enumerate your factual claims in 'claims'.")
+    if not checks.get("mentions_relationship", True):
+        lines.append("- This company has sponsored a past edition and the email "
+                     "never says so. Open on that, not on who we are.")
     for claim in detail["ungrounded"]:
         lines.append("- Not supported by the sources, remove or rewrite: "
                      + claim[:160])

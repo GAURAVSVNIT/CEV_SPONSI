@@ -24,8 +24,9 @@ from typing import Iterable
 
 from .state import Database, utcnow
 from . import ladder
+from . import models
 from .models import (CLOSED, Draft, Excerpt, IllegalTransition, Prospect, Research,
-                     check_transition)
+                     check_transition, norm_company)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS prospects (
@@ -76,8 +77,8 @@ CREATE TABLE IF NOT EXISTS drafts (
   prospect_id   TEXT REFERENCES prospects(id),
   run_id        INTEGER,
   action_id     INTEGER,
-  kind          TEXT CHECK (kind IN ('initial','nudge','new_angle','last_touch',
-                                     'needs_info')),
+  kind          TEXT CHECK (kind IN ('initial','returning','nudge','new_angle',
+                                     'last_touch','needs_info')),
   subject       TEXT,
   body          TEXT,
   claims        TEXT,
@@ -149,7 +150,7 @@ BEGIN SELECT RAISE(ABORT, 'touch cap: 4 touches maximum'); END;
 
 CREATE TRIGGER IF NOT EXISTS trg_no_draft_past_cap
 BEFORE INSERT ON drafts
-WHEN NEW.kind IN ('initial','nudge','new_angle','last_touch')
+WHEN NEW.kind IN ('initial','returning','nudge','new_angle','last_touch')
  AND (SELECT touches FROM prospects WHERE id = NEW.prospect_id) >= 4
 BEGIN SELECT RAISE(ABORT, 'touch cap reached: no further outreach drafts'); END;
 
@@ -196,23 +197,72 @@ EXPORT_COLUMNS = ("prospect_id", "company", "contact_name", "email", "segment",
                   "website", "source", "notes")
 
 
+def _add_later_columns(db: Database, table: str) -> None:
+    have = db.columns(table)
+    for name, decl in LATER_COLUMNS.get(table, {}).items():
+        if name not in have:
+            db.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, name, decl))
+
+
+def _drafts_ddl(name: str) -> str:
+    """The CREATE TABLE for drafts, lifted out of SCHEMA under a new name.
+
+    Extracted rather than duplicated so the migration below cannot drift away
+    from the real schema the way a hand-copied DDL always eventually does.
+    """
+    match = re.search(r"CREATE TABLE IF NOT EXISTS drafts \(.*?\n\);", SCHEMA, re.S)
+    if match is None:                       # pragma: no cover -- SCHEMA is a literal
+        raise RuntimeError("drafts DDL not found in SCHEMA")
+    return match.group(0).replace("CREATE TABLE IF NOT EXISTS drafts (",
+                                  "CREATE TABLE {} (".format(name), 1)
+
+
+def migrate_draft_kinds(db: Database) -> bool:
+    """Widen the drafts.kind CHECK constraint when it predates `returning`.
+
+    SQLite cannot ALTER a CHECK, so the table is rebuilt. Returns True when a
+    rebuild happened. Dropping drafts also drops the triggers and indexes on
+    it, so the caller re-runs SCHEMA afterwards to put them back -- without
+    that, the approval gate would silently disappear, which is the one failure
+    this project cannot have.
+    """
+    row = db.one("SELECT sql FROM sqlite_master WHERE type='table' AND name='drafts'")
+    if row is None or "'returning'" in (row["sql"] or ""):
+        return False
+
+    old = db.columns("drafts")
+    db.execute("PRAGMA foreign_keys=off")   # a PRAGMA inside a transaction is a no-op
+    try:
+        with db.transaction():
+            db.execute("DROP TABLE IF EXISTS drafts_migrate")
+            db.execute(_drafts_ddl("drafts_migrate"))
+            _add_later_columns(db, "drafts_migrate")
+            shared = [c for c in db.columns("drafts_migrate") if c in old]
+            cols = ", ".join(shared)
+            db.execute("INSERT INTO drafts_migrate ({}) SELECT {} FROM drafts"
+                       .format(cols, cols))
+            db.execute("DROP TABLE drafts")
+            db.execute("ALTER TABLE drafts_migrate RENAME TO drafts")
+    finally:
+        db.execute("PRAGMA foreign_keys=on")
+    db.executescript(SCHEMA)                # restore the dropped triggers/indexes
+    return True
+
+
 def ensure_schema(db: Database) -> None:
     db.executescript(SCHEMA)
-    for table, cols in LATER_COLUMNS.items():
-        have = db.columns(table)
-        for name, decl in cols.items():
-            if name not in have:
-                db.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, name, decl))
+    for table in LATER_COLUMNS:
+        _add_later_columns(db, table)
+    migrate_draft_kinds(db)
 
 
 # ---------------------------------------------------------------------------
 # prospects
 # ---------------------------------------------------------------------------
 
-def norm_company(name: str) -> str:
-    name = re.sub(r"\b(inc|llc|ltd|limited|pvt|private|corp|corporation|technologies"
-                  r"|technology|labs|software|systems)\b", "", (name or "").lower())
-    return re.sub(r"[^a-z0-9]", "", name)
+# norm_company is defined in models (so config.Event can use it without a
+# cycle) and imported at the top of this file, because this is where callers
+# have always imported it from.
 
 
 def import_csv(db: Database, path: str | Path) -> dict:
@@ -581,7 +631,7 @@ def mark_sent(db: Database, draft_id: int, today: date,
             db.execute("UPDATE drafts SET verdict=? WHERE id=?", (verdict, draft_id))
         db.execute("UPDATE drafts SET sent_at=?, message_id=?, channel=? WHERE id=?",
                    (utcnow(), message_id, channel, draft_id))
-        if row["kind"] in ("initial", "nudge", "new_angle", "last_touch"):
+        if row["kind"] in models.COLD_KINDS:
             touches = prospect.touches + 1
             first_touch = prospect.first_touch or today.isoformat()
             next_touch, next_kind = ladder.schedule_after_send(

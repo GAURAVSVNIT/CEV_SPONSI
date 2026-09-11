@@ -85,10 +85,12 @@ def test_a_named_group_is_greeted_by_its_own_name(cfg, db, llm, event, voice,
 def test_a_bare_role_mailbox_is_greeted_as_a_team(cfg, db, llm, event, voice,
                                                   prospect):
     """We have an address and no human behind it; greeting it by the mailbox
-    name would be worse than greeting the team."""
+    name would be worse than greeting the team. The company names the team --
+    "Hi team," is the opening of a mailshot, and we always know who we wrote
+    to even when we do not know a person there."""
     prospect.contact_name = "sponsorships@acme.com"
     draft, _ = _draft(db, cfg, llm, event, voice, prospect)
-    assert draft.body.startswith("Hi team,")
+    assert draft.body.startswith("Hi Acme Analytics Team,")
 
 
 def test_markdown_and_a_stray_subject_line_are_stripped(cfg, db, llm, event,

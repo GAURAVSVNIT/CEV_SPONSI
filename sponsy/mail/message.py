@@ -28,7 +28,7 @@ SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 # their question gets it because they asked. A nudge does not: re-sending the
 # same five-megabyte PDF three times is how a thread starts looking like spam,
 # and it costs deliverability on every later email from the same address.
-ATTACH_KINDS = ("initial", "needs_info")
+ATTACH_KINDS = ("initial", "returning", "needs_info")
 
 # Gmail refuses at 25 MB and counts base64 overhead, so the real ceiling is
 # nearer 18. Stop well short: a brochure that big is the wrong file anyway.
@@ -135,7 +135,10 @@ def build_message(cfg, event, voice, prospect, subject: str, body: str,
     # message with no text part scores badly with spam filters.
     from .render import logo_files, render_html, render_text  # noqa: PLC0415
 
-    full = kind == "initial"          # a follow-up does not repeat the whole deck
+    # A follow-up does not repeat the whole deck. A returning sponsor still
+    # gets it: the tiers change between editions, and they are being asked to
+    # decide again, not merely reminded.
+    full = kind in ("initial", "returning")
     has_brochure = attachment is not None
     try:
         company = (getattr(prospect, "company", "") or "").strip()

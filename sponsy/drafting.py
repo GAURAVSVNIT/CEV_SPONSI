@@ -97,6 +97,26 @@ def _extra_context(event, kind: str, previous: list[dict] | None,
         bits.append(prompts.BROCHURE_NOTE)
     if research.thin:
         bits.append(prompts.THIN_RESEARCH_NOTE)
+    if kind == "returning":
+        # Everything the drafter may say about the relationship, from our own
+        # records. Without this it has only "they sponsored us once" and will
+        # be tempted to embroider; the shift tells it not to, and this gives
+        # it enough true material that it does not need to.
+        facts = ["They are on our past-sponsor list for a previous edition of "
+                 "this event."]
+        if getattr(event, "legacy", ""):
+            facts.append("Our own history, which you may draw on: "
+                         + " ".join(str(event.legacy).split()))
+        whats_new = getattr(event, "whats_new", "")
+        if whats_new:
+            facts.append("What is different about this edition: "
+                         + " ".join(str(whats_new).split()))
+        else:
+            facts.append("We have nothing on record about what is new this "
+                         "edition beyond the event facts above, so do not "
+                         "invent a change. The edition number is enough.")
+        bits.append("\nThe relationship (our records, not research): "
+                    + " ".join(facts))
     if kind in ("nudge", "new_angle"):
         # A follow-up needs one thing the first email did not have. These are
         # ours, so they are true by construction -- but only if event.yml is.
@@ -162,7 +182,7 @@ def draft_email(llm, cfg, db, prospect, research: Research, excerpts: list[Excer
         voice_block=voice.style_block(),
         examples_block=voice.examples_block(),
         fewshot_block=fewshot_block(db, voice),
-        greeting=voice.greeting_for(prospect.contact_name),
+        greeting=voice.greeting_for(prospect.contact_name, prospect.company),
         signoff=voice.signoff,
         contact_block=contact_block(event),
         instruction_block=instruction_block)
@@ -171,8 +191,11 @@ def draft_email(llm, cfg, db, prospect, research: Research, excerpts: list[Excer
         user += ("\n\nYour previous attempt was rejected by the verifier:\n"
                  + feedback + "\nFix exactly those problems. Do not add new claims.")
 
+    structure = (prompts.DRAFT_STRUCTURE_RETURNING if kind == "returning"
+                 else prompts.DRAFT_STRUCTURE_COLD)
     data, cost = structured(llm, system=prompts.DRAFT_SYSTEM.format(
-        max_words=voice.max_words), user=user, temperature=0.5, db=db,
+        max_words=voice.max_words, structure=structure), user=user,
+        temperature=0.5, db=db,
         run_id=run_id, kind="draft_attempt", target=prospect.id)
 
     claims = data.get("claims") or []

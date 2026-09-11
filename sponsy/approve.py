@@ -83,7 +83,12 @@ def draft_message(row, detail: dict | None = None) -> str:
 
     head = "<b>Draft for {}</b> ({})".format(esc(row["company"]),
                                              esc(row["prospect_id"]))
-    if row["kind"] != "initial":
+    if row["kind"] == "returning":
+        # Worth its own label rather than being filed under "touch": it is the
+        # one kind whose whole premise is a fact about us, so the approver
+        # should check that premise before tapping Send.
+        head += " | <b>returning sponsor</b>"
+    elif row["kind"] != "initial":
         head += " | touch {}".format(esc(row["kind"]))
     lines = [head,
              "To: {}".format(esc(row["email"] or "(no address)")),

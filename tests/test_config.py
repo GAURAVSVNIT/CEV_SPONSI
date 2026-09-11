@@ -454,3 +454,30 @@ def test_examples_block_caps_at_three(voice):
     block = voice.examples_block()
     assert "--- example 3 ---" in block
     assert "--- example 4 ---" not in block
+
+
+@pytest.mark.parametrize("contact,company,expected", [
+    # no person at all: the company is what we do know
+    ("", "DigitalOcean", "Hi DigitalOcean Team,"),
+    ("", "Coding Blocks", "Hi Coding Blocks Team,"),
+    # a role mailbox is not a person either
+    ("sponsorships@vercel.com", "Vercel", "Hi Vercel Team,"),
+    ("community", "Devfolio", "Hi Devfolio Team,"),
+    # a real name still wins
+    ("Devi Sharma", "Acme Analytics", "Hi Devi,"),
+    # already says "team": leave the caller's wording alone
+    ("Partnerships Team", "Acme", "Hi Partnerships Team,"),
+    # nothing known: the old fallback
+    ("", "", "Hi there,"),
+])
+def test_greeting_uses_the_company_when_there_is_no_person(voice, contact, company,
+                                                           expected):
+    """Most sponsorship inboxes are sponsorships@ with no name attached, and
+    "Hi there," is how a mailshot opens. We always know the company."""
+    assert voice.greeting_for(contact, company) == expected
+
+
+def test_greeting_without_a_company_still_works(voice):
+    """The company argument is optional: older callers must not break."""
+    assert voice.greeting_for("Devi Sharma") == "Hi Devi,"
+    assert voice.greeting_for("") == "Hi there,"

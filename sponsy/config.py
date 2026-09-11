@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .models import norm_company
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 
@@ -396,6 +398,11 @@ class Event:
     what_we_offer: list[dict] = field(default_factory=list)   # {title, detail}
     custom_packages: str = ""
     legacy: str = ""
+    # What is genuinely new this edition. Only the returning-sponsor email
+    # uses it, and only if it is set: "we are doing it again" is a weak ask,
+    # but an invented change is worse, so blank means the drafter is told to
+    # lean on the edition number instead of inventing one.
+    whats_new: str = ""
     past_sponsors: list[str] = field(default_factory=list)
     past_sponsors_logo: str = ""
     organisers: list[dict] = field(default_factory=list)   # {name, logo?}
@@ -420,6 +427,19 @@ class Event:
 
     def where(self) -> str:
         return ", ".join(p for p in (self.city, self.region, self.country) if p)
+
+    def is_past_sponsor(self, company: str) -> bool:
+        """Did this company back a previous edition?
+
+        Compared on the normalised name, so "Digital Ocean" in the prospect
+        list matches "DigitalOcean" in past_sponsors. Getting this wrong in
+        either direction writes the wrong email: a cold pitch to a returning
+        sponsor looks forgetful, and a "welcome back" to a stranger is worse.
+        """
+        key = norm_company(company)
+        if not key:
+            return False
+        return any(norm_company(name) == key for name in self.past_sponsors)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Event":
@@ -497,13 +517,23 @@ class Voice:
         voice.max_words = int(voice.max_words or 130)
         return voice
 
-    def greeting_for(self, contact_name: str = "") -> str:
+    def greeting_for(self, contact_name: str = "", company: str = "") -> str:
         name = (contact_name or "").strip()
         low = name.lower()
         if not name:
-            first = "there"
+            # Most role mailboxes -- sponsorships@, community@ -- come with no
+            # person attached, and "Hi there," is what a mailshot opens with.
+            # We always know the company even when we do not know a name, and
+            # "DigitalOcean Team" is what a person would actually write.
+            company = (company or "").strip()
+            first = "{} Team".format(company) if company else "there"
         elif any(w in low for w in TEAM_WORDS) or "@" in name:
-            first = name if "team" in low else "team"
+            if "team" in low:
+                first = name
+            elif (company or "").strip():
+                first = "{} Team".format(company.strip())
+            else:
+                first = "team"
         else:
             first = name.split()[0]
         try:

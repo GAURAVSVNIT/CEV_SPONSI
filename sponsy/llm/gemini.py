@@ -69,6 +69,10 @@ class GeminiLLM(BaseLLM):
         self.min_interval = float(getattr(cfg, "min_interval_s", 0) or 0)
         self.keys = list(cfg.api_keys) or [""]
         self.db = db
+        # Models that refuse to have thinking switched off, learned from the
+        # first 400 rather than hardcoded, so a new model does not need a code
+        # change to work here.
+        self._no_thinking: set[str] = set()
         self._load_exhausted()
 
     # -- key rotation ------------------------------------------------------
@@ -165,7 +169,7 @@ class GeminiLLM(BaseLLM):
 
         model = model or self.model
         gen_config: dict[str, Any] = {"temperature": temperature}
-        if self.cfg.thinking_budget is not None:
+        if self.cfg.thinking_budget is not None and model not in self._no_thinking:
             gen_config["thinkingConfig"] = {"thinkingBudget": self.cfg.thinking_budget}
         if response_json and not tools:
             # Gemini rejects responseMimeType together with function declarations.
@@ -203,6 +207,20 @@ class GeminiLLM(BaseLLM):
                 if resp.status_code == 200:
                     return self._parse(resp.json(), model)
                 last_error = "HTTP {}: {}".format(resp.status_code, resp.text[:300])
+                if (resp.status_code == 400 and "thinkingConfig" in gen_config
+                        and "INVALID_ARGUMENT" in resp.text):
+                    # Not every model lets thinking be switched off. The lite
+                    # models reject thinkingBudget:0 outright with a bare
+                    # "invalid argument", which silently broke every cheap-model
+                    # call -- grounding, reply classification, sponsor
+                    # extraction -- while the main model accepted the same
+                    # setting. Drop the budget and try once more rather than
+                    # making the operator work that out from a 400.
+                    dropped = gen_config.pop("thinkingConfig")
+                    self._no_thinking.add(model)     # do not re-pay this 400
+                    print("[llm] {} rejected thinkingBudget={}; retrying without it"
+                          .format(model, dropped.get("thinkingBudget")))
+                    continue
                 if resp.status_code not in RETRY_STATUS:
                     raise LLMError(last_error)
                 if resp.status_code == 429:

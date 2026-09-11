@@ -160,7 +160,23 @@ def fake_draft(system: str, messages: list[dict]):
     # only. No tier, no price, no sign-off -- the brochure carries the tiers
     # and render.py adds the sign-off.
     want = (research.get("student_relevance") or research.get("hook") or "").strip()
-    if thin:
+    if ctx["kind"] == "returning":
+        # The stub mirrors what the real returning prompt asks for: open on the
+        # relationship, no who-we-are paragraph, no claims about the company
+        # (the hook is our own record, and the verifier exempts this kind).
+        body = (
+            "{greeting}\n\n"
+            "You backed a previous edition of {event}, and it made a real "
+            "difference to what the teams could build that weekend. We're "
+            "running it again on {date} and we'd like to have {company} "
+            "back.\n\n"
+            "Since you already know how the event runs, I'll skip the "
+            "introduction. The brochure attached has this year's packages.\n\n"
+            "If some parts of last time were worth more to you than others, "
+            "tell me which and we'll build the package around that rather "
+            "than around our own tiers.")
+        claims = []
+    elif thin:
         body = (
             "{greeting}\n\n"
             "I couldn't find much about how {company} works with student "

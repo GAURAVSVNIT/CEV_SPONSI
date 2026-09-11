@@ -364,3 +364,76 @@ def test_tool_results_are_sent_as_function_responses(two_keys):
                                    "response": {"title": "A"}}])
     assert out[0]["role"] == "user"
     assert out[0]["parts"][0]["functionResponse"]["name"] == "fetch_page"
+
+
+INVALID_ARG = ('{"error":{"code":400,"message":"Request contains an invalid '
+               'argument.","status":"INVALID_ARGUMENT"}}')
+
+
+def test_a_model_that_refuses_thinkingBudget_zero_is_retried_without_it(two_keys,
+                                                                       monkeypatch):
+    """gemini-3.5-flash-lite rejects thinkingBudget:0 with a bare "invalid
+    argument" while the main model accepts it. LLM_THINKING_BUDGET=0 is the
+    documented cheapest setting, so this broke every cheap-model call --
+    grounding, reply classification, sponsor extraction -- and the 400 said
+    nothing about thinking.
+    """
+    sent: list[dict] = []
+
+    def fake_post(url, json=None, timeout=None, headers=None):
+        import copy
+        # the caller mutates generationConfig in place on the retry, so this
+        # has to be a snapshot or every recorded body looks like the last one
+        sent.append(copy.deepcopy(json))
+        if "thinkingConfig" in json["generationConfig"]:
+            return FakeResponse(400, INVALID_ARG)
+        return FakeResponse(200, payload=GEMINI_OK)
+
+    import requests
+    monkeypatch.setattr(requests, "post", fake_post)
+    llm = GeminiLLM(two_keys)
+    llm.generate(system="s", messages=[{"role": "user", "text": "hi"}])
+
+    assert len(sent) == 2
+    assert "thinkingConfig" in sent[0]["generationConfig"]
+    assert "thinkingConfig" not in sent[1]["generationConfig"]
+
+
+def test_the_refusal_is_remembered_so_it_is_not_paid_for_twice(two_keys, monkeypatch):
+    """One wasted round trip to learn it is fine; one per call is not."""
+    sent: list[dict] = []
+
+    def fake_post(url, json=None, timeout=None, headers=None):
+        import copy
+        # the caller mutates generationConfig in place on the retry, so this
+        # has to be a snapshot or every recorded body looks like the last one
+        sent.append(copy.deepcopy(json))
+        if "thinkingConfig" in json["generationConfig"]:
+            return FakeResponse(400, INVALID_ARG)
+        return FakeResponse(200, payload=GEMINI_OK)
+
+    import requests
+    monkeypatch.setattr(requests, "post", fake_post)
+    llm = GeminiLLM(two_keys)
+    for _ in range(3):
+        llm.generate(system="s", messages=[{"role": "user", "text": "hi"}])
+
+    assert len(sent) == 4          # one failed probe, then three clean calls
+    assert not any("thinkingConfig" in s["generationConfig"] for s in sent[1:])
+
+
+def test_a_plain_400_is_still_not_retried(two_keys, monkeypatch):
+    """The retry is for one specific refusal, not a licence to retry every
+    client error -- a malformed request must still fail loudly and at once."""
+    calls = []
+
+    def fake_post(url, json=None, timeout=None, headers=None):
+        calls.append(1)
+        return FakeResponse(400, "bad request")
+
+    import requests
+    monkeypatch.setattr(requests, "post", fake_post)
+    with pytest.raises(LLMError, match="400"):
+        GeminiLLM(two_keys).generate(system="s",
+                                     messages=[{"role": "user", "text": "hi"}])
+    assert len(calls) == 1

@@ -47,13 +47,52 @@ LADDER: tuple[Step, ...] = (
          "door open and say plainly that you will not write again."),
 )
 
+# The other form of touch 1, for a company already on our past-sponsor list.
+# Same ladder position, same day, same brochure, same full deck -- only the
+# opening changes. It is not in LADDER because LADDER is indexed by touch
+# number and there is only one touch 1; `first_kind` chooses between them.
+RETURNING = Step(
+    1, 0, "returning",
+    "They have sponsored a past edition of this event. Do NOT introduce the "
+    "club, do NOT explain what the event is, and do NOT write the "
+    "why-we-picked-you paragraph: the existing relationship is the reason, and "
+    "explaining ourselves to a company whose logo is already on our site reads "
+    "as though we forgot them. Open by naming that they backed us before and "
+    "what that looked like. Then say what is different about this edition, ask "
+    "them to come back, and say the package can be shaped around what did or "
+    "did not work for them last time.")
+
 BY_TOUCH = {s.touch: s for s in LADDER}
 BY_KIND = {s.kind: s for s in LADDER}
+BY_KIND[RETURNING.kind] = RETURNING
+
+# Kinds that occupy touch 1. A prospect gets exactly one of these, ever.
+FIRST_KINDS = ("initial", "returning")
 
 
 def next_step(touches: int) -> Step | None:
     """The step to draft next for a prospect that has been touched `touches` times."""
     return BY_TOUCH.get(touches + 1)
+
+
+def first_kind(event, company: str) -> str:
+    """'returning' when this company backed a past edition, else 'initial'.
+
+    Only ever consulted for touch 1; the follow-ups read the same to a
+    returning sponsor as to anyone else.
+    """
+    try:
+        return "returning" if event.is_past_sponsor(company) else "initial"
+    except AttributeError:              # an Event from before this existed
+        return "initial"
+
+
+def step_for(event, company: str, touches: int) -> Step | None:
+    """The step to draft next, with touch 1 resolved to the right variant."""
+    step = next_step(touches)
+    if step is not None and step.kind == "initial":
+        return BY_KIND[first_kind(event, company)]
+    return step
 
 
 def _as_date(value: str | date | None) -> date | None:

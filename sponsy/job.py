@@ -141,7 +141,9 @@ class SponsorshipJob:
                         esc(event.prospect_id), esc(event.snippet[:600])))
 
         for prospect in inputs["due"]:
-            step = ladder.next_step(prospect.touches)
+            # step_for resolves touch 1 to `returning` for a company already
+            # on our past-sponsor list; every later touch is the same either way.
+            step = ladder.step_for(self.event, prospect.company, prospect.touches)
             if step is None:
                 continue
             action = self._draft_and_queue(prospect, step.kind)
@@ -189,9 +191,15 @@ class SponsorshipJob:
                 age = (self.today - date.fromisoformat(when[:10])).days
             except ValueError:
                 age = 0
-            if age > RESEARCH_TTL_DAYS or age < 0:
+            # Only genuinely old research is refetched. A *negative* age means
+            # the stamp is ahead of this job's date, which happens whenever
+            # local time runs behind UTC -- any timezone west of Greenwich, or
+            # a --today in the past. That research is newer than now, not
+            # staler, and treating it as stale re-researched every prospect on
+            # every run: the exact free-tier burn this TTL exists to prevent.
+            if age > RESEARCH_TTL_DAYS:
                 return False
-        return not (stored.thin and kind == "initial")
+        return not (stored.thin and kind in ladder.FIRST_KINDS)
 
     def _research_for(self, prospect, kind: str):
         """Research once per prospect, not once per touch. Follow-ups -- and
@@ -318,7 +326,7 @@ class SponsorshipJob:
                 "No sources found for <b>{}</b> ({}). Not drafting blind; will "
                 "retry tomorrow.".format(esc(prospect.company), esc(prospect.id)))
             return None
-        if kind == "initial" and prospect.status == "new":
+        if kind in ladder.FIRST_KINDS and prospect.status == "new":
             store.set_status(self.db, prospect.id, "researched")
 
         if ask:

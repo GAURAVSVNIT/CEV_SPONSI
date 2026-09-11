@@ -2,8 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+
+def norm_company(name: str) -> str:
+    """Company name reduced to a comparison key: "Acme Corp, Inc." -> "acme".
+
+    Lives here rather than in store.py because config.Event needs it to answer
+    "have they sponsored us before?", and store imports ladder which would make
+    that a cycle. store re-exports it, so `store.norm_company` still works.
+    """
+    name = re.sub(r"\b(inc|llc|ltd|limited|pvt|private|corp|corporation|technologies"
+                  r"|technology|labs|software|systems)\b", "", (name or "").lower())
+    return re.sub(r"[^a-z0-9]", "", name)
 
 # --- status machine --------------------------------------------------------
 
@@ -31,8 +44,13 @@ TRANSITIONS: dict[str, set[str]] = {
 }
 
 CLOSED = ("declined", "cold", "interested")
-KINDS = ("initial", "nudge", "new_angle", "last_touch", "needs_info")
-COLD_KINDS = ("initial", "nudge", "new_angle", "last_touch")
+# `returning` is the other form of touch 1: same ladder position, same
+# brochure, same full deck as `initial`, different opening. It goes to a
+# company already on our past-sponsor list, where "hello, we are ACM SVNIT"
+# reads as though we forgot they backed us.
+KINDS = ("initial", "returning", "nudge", "new_angle", "last_touch", "needs_info")
+COLD_KINDS = ("initial", "returning", "nudge", "new_angle", "last_touch")
+FIRST_KINDS = ("initial", "returning")
 REPLY_LABELS = ("interested", "declined", "needs_info", "out_of_office", "other")
 VERDICTS = ("approved", "edited", "skipped", "rejected", "superseded")
 

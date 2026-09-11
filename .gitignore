@@ -1,5 +1,7 @@
 .env
 data/*.db
+data/*.db.bak
+data/*.bak
 data/*.db-wal
 data/*.db-shm
 data/outbox/*
@@ -28,6 +30,6 @@ venv/
 data/prospects.ranked.csv
 data/prospects.*.csv
 !data/prospects.csv
-# rendered email preview -- carries the organiser's phone number
-preview.html
+# rendered email previews -- they carry the organiser's phone number
+preview*.html
 *.eml

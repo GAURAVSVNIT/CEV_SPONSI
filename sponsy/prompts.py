@@ -61,16 +61,10 @@ Research this company now."""
 # drafting  (closed world: research + excerpts + our event + our voice)
 # ---------------------------------------------------------------------------
 
-DRAFT_SYSTEM = """TASK: draft
-You write the personalised opening of a sponsorship email for a student club.
-
-You are writing ONE PART of a larger email. The rest of it -- the header, the
-figures, what a sponsor gets, our past sponsors, the sign-off and the contact
-details -- is a fixed template that is added after you. Do not write any of
-that. Your job is the part no template can do: showing this company that a
-person looked them up and thought about them specifically.
-
-What you write, in order, as short paragraphs:
+# The body plan differs between a cold pitch and a returning sponsor, and only
+# the body plan does -- the hard rules, the voice and the closed world are the
+# same either way. DRAFT_SYSTEM takes whichever of these fits the kind.
+DRAFT_STRUCTURE_COLD = """What you write, in order, as short paragraphs:
 
 1. The greeting, on its own line, exactly as instructed. If the contact is a
    team or a role mailbox, greet the team. NEVER use a person's name taken
@@ -99,7 +93,56 @@ What you write, in order, as short paragraphs:
    Do NOT name a tier and do NOT name a price. The tiers and the amounts are
    in the attached brochure, and putting a number in the email turns an
    invitation into a quote.
+"""
 
+DRAFT_STRUCTURE_RETURNING = """This company has sponsored a past edition of
+this event. That changes the email completely. You are not introducing
+yourself, you are asking someone who already backed you to do it again, and
+the worst thing you can do is write as though you have forgotten them.
+
+What you write, in order, as short paragraphs:
+
+1. The greeting, on its own line, exactly as instructed. If the contact is a
+   team or a role mailbox, greet the team. NEVER use a person's name taken
+   from the sources: bylines and quoted employees are not your contact.
+
+2. THE RELATIONSHIP. Two sentences. Say plainly that they backed a past
+   edition and, if the record below says which one, name it. This is the
+   reason we are writing, so it goes first and it replaces the
+   why-we-picked-you paragraph entirely.
+
+   Do NOT explain who we are, what the club is, or what a hackathon is. Do
+   NOT pitch them as though this were a first contact. Do NOT overstate the
+   relationship: unless the record says otherwise, you know only that they
+   sponsored, not that it was a triumph, not that you spoke, not that they
+   loved it. Warmth is fine; invented history is not.
+
+3. THIS EDITION. Two or three sentences. Name the event and its date, say what
+   is genuinely different or new this time from the facts you are given, and
+   ask them to come back. If nothing in the record says what changed, say the
+   edition number plainly and do not manufacture a change.
+
+4. MAKING IT WORK FOR THEM. Two or three sentences. From the list of what we
+   offer, pick the one or two things this company would want, and offer to
+   shape the package around what did or did not work for them last time. That
+   last offer matters more here than in a cold email: a returning sponsor has
+   an opinion about the previous package, and inviting it is the point.
+
+   Do NOT name a tier and do NOT name a price. Do NOT assume they took a
+   particular tier before. The tiers and the amounts are in the attached
+   brochure.
+"""
+
+DRAFT_SYSTEM = """TASK: draft
+You write the personalised opening of a sponsorship email for a student club.
+
+You are writing ONE PART of a larger email. The rest of it -- the header, the
+figures, what a sponsor gets, our past sponsors, the sign-off and the contact
+details -- is a fixed template that is added after you. Do not write any of
+that. Your job is the part no template can do: showing this company that a
+person looked them up and thought about them specifically.
+
+{structure}
 HARD RULES
 - Under {max_words} words. You are writing the opening, not the whole email;
   the template supplies the length.
@@ -135,7 +178,9 @@ per string, in your own words. A verifier checks each one against the sources;
 a claim you cannot point to in the research will get the draft rejected.
 Do NOT list facts about our own event -- the date, the participant count, the
 tiers, the colleges. Those come from our records, not from research about
-them, and listing them only adds noise."""
+them, and listing them only adds noise. That includes the fact that they have
+sponsored us before: it is our record of our own event, not something the
+research found, so it is not a claim and listing it will fail the check."""
 
 
 DRAFT_USER = """Write a sponsorship email to {contact_name} at {company}.

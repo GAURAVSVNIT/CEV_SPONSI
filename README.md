@@ -313,6 +313,7 @@ Timing lives in `sponsy/ladder.py`, in code. The model only writes copy.
 | Touch | Day | Kind | What changes |
 |---|---|---|---|
 | 1 | 0 | `initial` | the researched hook |
+| 1 | 0 | `returning` | *instead of* `initial` when they backed a past edition |
 | 2 | +3 | `nudge` | three or four lines, exactly one new detail |
 | 3 | +7 | `new_angle` | different frame (recruiting vs visibility), maybe a smaller tier |
 | 4 | +14 | `last_touch` | short, no pressure, says plainly it is the last one |
@@ -320,6 +321,19 @@ Timing lives in `sponsy/ladder.py`, in code. The model only writes copy.
 
 Four touches, ever. A `Skip` pushes the next touch by three days; "no sources
 found" retries tomorrow rather than drafting blind.
+
+**The returning variant.** A company listed in `past_sponsors` gets a different
+touch 1: it opens on the existing relationship, skips the who-we-are paragraph
+and the why-we-picked-you paragraph, and asks them to come back. Sending the
+cold version to a company whose logo is already on your own site reads as
+though you forgot they sponsored you, which is a worse impression than not
+writing. Matching is on the normalised name, so `Digital Ocean` in the prospect
+sheet finds `DigitalOcean` in the config. The verifier makes the relationship a
+*hard* check — a returning draft that never mentions it is rejected rather than
+sent — and the approval card labels it, because its premise is a claim about
+your own history that only you can confirm. Set `whats_new` in `event.yml` to
+give it a reason beyond the edition number; left blank, the drafter is told to
+use the edition number rather than invent one.
 
 Replies are polled read-only (Gmail API or IMAP), classified, and turned into a
 status change:
