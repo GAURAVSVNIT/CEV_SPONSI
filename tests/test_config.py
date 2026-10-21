@@ -337,7 +337,7 @@ def test_event_example_parses():
     assert all(isinstance(t, Tier) and t.deliverables for t in ev.tiers)
     assert ev.where() == "Surat, Gujarat, India"
     assert ev.kind == "hackathon"
-    assert len(ev.track_record) == 5
+    assert len(ev.track_record) == 8
     assert ev.confirmed_sponsors == []
     assert ev.registrations_so_far == 0
     assert ev.phone.startswith("+91")
@@ -386,7 +386,7 @@ def test_voice_falls_back_to_event_fields_and_synthesises_a_signoff(tmp_path, ev
     assert voice.club == "ACM SVNIT"
     assert voice.signoff == "Thanks,\nRudraksh\nSponsorship Lead, ACM SVNIT"
     assert voice.greeting == "Hi {first},"
-    assert voice.max_words == 130
+    assert voice.max_words == 240
     assert voice.sample_emails == []
 
 

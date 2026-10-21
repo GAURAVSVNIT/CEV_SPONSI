@@ -158,6 +158,28 @@ class Config:
     # it just means a plain-text email.
     brochure: Path = field(default_factory=lambda: DATA / "brochure.pdf")
 
+    # --- deliverability (see sponsy/mail/pacing.py and outbox.py) ---
+    # An approval puts the email in the outbox; it leaves when these allow.
+    send_daily_cap: int = 20
+    send_hourly_cap: int = 8
+    send_min_gap: int = 90                # seconds between two sends
+    send_jitter: int = 60                 # up to this many more, at random
+    send_hours: str = "09:00-18:00"
+    send_days: str = "mon-fri"
+    send_tz: str = ""                     # blank = this machine's zone (TZ)
+    send_warmup: bool = True
+    send_warmup_start: int = 8
+    send_warmup_step: int = 4
+    # Sending pauses itself when hard bounces pass this share of the last
+    # week's sends (with at least BOUNCE_PAUSE_MIN of them).
+    bounce_pause_rate: float = 0.05
+    bounce_pause_min: int = 3
+    check_mx: bool = True                 # skip addresses whose domain takes no mail
+    followups_in_thread: bool = True      # nudges reply in the first email's thread
+    public_url: str = ""                  # https://... where `web` is reachable
+    secret: str = ""                      # signs unsubscribe links; blank = data/secret.key
+    dkim_selector: str = "google"         # `doctor` looks for <selector>._domainkey
+
     # --- replies ---
     replies_provider: str = "auto"        # auto | gmail_api | imap | none
     imap_host: str = "imap.gmail.com"
@@ -213,6 +235,23 @@ class Config:
             send_only_to=[a.strip().lower() for a in _env("SEND_ONLY_TO").split(",")
                           if a.strip()],
             brochure=_env_path("BROCHURE", DATA / "brochure.pdf"),
+            send_daily_cap=_env_int("SEND_DAILY_CAP", 20),
+            send_hourly_cap=_env_int("SEND_HOURLY_CAP", 8),
+            send_min_gap=_env_int("SEND_MIN_GAP", 90),
+            send_jitter=_env_int("SEND_JITTER", 60),
+            send_hours=_env("SEND_HOURS", "09:00-18:00"),
+            send_days=_env("SEND_DAYS", "mon-fri"),
+            send_tz=_env("SEND_TZ"),
+            send_warmup=_env_bool("SEND_WARMUP", True),
+            send_warmup_start=_env_int("SEND_WARMUP_START", 8),
+            send_warmup_step=_env_int("SEND_WARMUP_STEP", 4),
+            bounce_pause_rate=_env_float("BOUNCE_PAUSE_RATE", 0.05),
+            bounce_pause_min=_env_int("BOUNCE_PAUSE_MIN", 3),
+            check_mx=_env_bool("CHECK_MX", True),
+            followups_in_thread=_env_bool("FOLLOWUPS_IN_THREAD", True),
+            public_url=_env("PUBLIC_URL").rstrip("/"),
+            secret=_env("SPONSY_SECRET"),
+            dkim_selector=_env("DKIM_SELECTOR", "google"),
             replies_provider=_env("REPLIES_PROVIDER", "auto").lower(),
             imap_host=_env("IMAP_HOST", "imap.gmail.com"),
             imap_user=_env("IMAP_USER"),
@@ -311,6 +350,13 @@ class Config:
         if not self.send_only_to:
             return True
         return (address or "").strip().lower() in self.send_only_to
+
+    @property
+    def paced(self) -> bool:
+        """Does [Send] go through the outbox? Only when mail really leaves:
+        the manual channel and a dry run have nothing to pace."""
+        return (not self.dry_run and
+                self.resolved_mail_provider() in ("gmail_api", "smtp"))
 
     @property
     def brochure_file(self) -> Path | None:
@@ -412,6 +458,14 @@ class Event:
     # Set by Event.load: where the files named in `organisers[].logo` live.
     logo_dir: Path | None = None
     team_contacts: list[dict] = field(default_factory=list)   # {name, phone}
+    # The last line of every email: how to make us stop. A visible, easy way
+    # out is what keeps a recipient on "reply" instead of "Report spam", and
+    # spam reports are what Gmail measures a sender on. Set it to "" in
+    # event.yml to drop it. Deliberately free of the words the reply poll
+    # treats as an opt-out ("unsubscribe", "opt out" ...), because replies
+    # quote it back to us.
+    opt_out: str = ("Not the right person for this, or not interested? A one-line "
+                    "reply is enough and we will not write again.")
 
     def track_record_block(self) -> str:
         if not self.track_record:
@@ -485,7 +539,10 @@ class Voice:
     club: str = ""
     greeting: str = "Hi {first},"
     signoff: str = ""
-    max_words: int = 130
+    # Caps the model's personalised opening, not the whole email: the HTML
+    # template adds the stats, packages and contacts after it. The suite uses
+    # the same ceiling (tests/conftest.py), so it measures what this produces.
+    max_words: int = 240
     tone_notes: list[str] = field(default_factory=list)
     phrases_i_use: list[str] = field(default_factory=list)
     phrases_i_avoid: list[str] = field(default_factory=list)
@@ -514,7 +571,7 @@ class Voice:
             voice.signoff = "Thanks,\n{}\n{}, {}".format(
                 voice.sender_name, voice.sender_role, voice.club).strip()
         voice.signoff = voice.signoff.strip()
-        voice.max_words = int(voice.max_words or 130)
+        voice.max_words = int(voice.max_words or 240)
         return voice
 
     def greeting_for(self, contact_name: str = "", company: str = "") -> str:

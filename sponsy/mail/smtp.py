@@ -1,6 +1,7 @@
 """Gmail SMTP with an app password: the five-minute path.
 
-STARTTLS on 587, one login, one message. Replies then have to be read over
+STARTTLS on 587 (or implicit TLS on 465), one login, one message. Never
+plaintext: Gmail's sender rules require TLS, and so does an app password. Replies then have to be read over
 IMAP with the same password, which is why gmail_api is the preferred channel
 once someone has ten minutes for the OAuth flow.
 """
@@ -38,9 +39,14 @@ UPLOAD_TIMEOUT = 300
 def _connect(cfg, timeout: int = HANDSHAKE_TIMEOUT):
     import smtplib  # noqa: PLC0415
 
-    server = smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=timeout)
-    server.ehlo()
-    server.starttls()                    # smtplib re-EHLOs before login
+    if int(cfg.smtp_port) == 465:
+        # Implicit TLS (SMTPS). Some hosts and some networks only offer this.
+        server = smtplib.SMTP_SSL(cfg.smtp_host, cfg.smtp_port, timeout=timeout)
+        server.ehlo()
+    else:
+        server = smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=timeout)
+        server.ehlo()
+        server.starttls()                # smtplib re-EHLOs before login
     server.login(cfg.smtp_user, cfg.smtp_password)
     return server
 

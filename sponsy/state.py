@@ -68,7 +68,10 @@ class Database:
         if self.path != ":memory:":
             self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.execute("PRAGMA busy_timeout = 5000")
-        self.conn.executescript(CORE_SCHEMA)
+        # One transaction, so one sync to disk instead of one per statement:
+        # on a slow disk that is the difference between milliseconds and a
+        # second at every start.
+        self.conn.executescript("BEGIN;\n" + CORE_SCHEMA + "\nCOMMIT;")
 
     # -- plumbing ----------------------------------------------------------
     def execute(self, sql: str, params: tuple | dict = ()) -> sqlite3.Cursor:
@@ -129,10 +132,17 @@ class Database:
         return self.one(sql, tuple(params))
 
     def ran_on(self, job: str, day: str) -> bool:
-        """Did this job already finish successfully on `day` (YYYY-MM-DD, UTC)?"""
+        """Did this job already finish successfully on `day` (YYYY-MM-DD, local)?
+
+        started_at is stored in UTC but `day` is the job's local date, so the
+        comparison converts first. Comparing the raw UTC prefix let a run
+        between local midnight and the UTC rollover (00:00-05:30 in India)
+        count for the previous day, and the morning's scheduled run then ran
+        a second time.
+        """
         row = self.one(
             "SELECT 1 FROM runs WHERE job=? AND status IN ('success','escalated') "
-            "AND substr(started_at,1,10)=? LIMIT 1", (job, day))
+            "AND date(started_at, 'localtime')=? LIMIT 1", (job, day))
         return row is not None
 
     # -- actions -----------------------------------------------------------

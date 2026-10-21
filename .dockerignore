@@ -1,0 +1,26 @@
+# Secrets and state never go into the image: they are mounted at run time.
+.env
+data/*.db
+data/*.db-*
+data/*.bak
+data/gmail_credentials.json
+data/gmail_token.json
+data/secret.key
+data/heartbeat
+data/backups/
+data/outbox/
+data/event.yml
+data/voice.yml
+data/prospects.*.csv
+!data/prospects.csv
+
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.idea/
+.vscode/
+*.eml
+preview*.html

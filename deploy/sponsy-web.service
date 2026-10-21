@@ -1,0 +1,23 @@
+# The browser UI and the public unsubscribe link, on 127.0.0.1:8765 behind
+# Caddy (deploy/Caddyfile). See sponsy.service for the install steps.
+[Unit]
+Description=SPONSY web UI and unsubscribe endpoint
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=sponsy
+WorkingDirectory=/opt/sponsy/app
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/sponsy/venv/bin/python run.py web --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=10
+TimeoutStopSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/sponsy/app/data
+
+[Install]
+WantedBy=multi-user.target

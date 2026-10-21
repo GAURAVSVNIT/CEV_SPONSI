@@ -333,6 +333,19 @@ def _signoff(event, voice, closing: str) -> str:
         "".join(bits))
 
 
+def _opt_out(event, url: str = "") -> str:
+    """The small print under the footer: the visible way out."""
+    text = (getattr(event, "opt_out", "") or "").strip()
+    if not text:
+        return ""
+    link = (' You can also <a href="{}" style="color:{};">use this link</a>.'
+            .format(esc(url), MUTED) if url else "")
+    return ('<tr><td style="padding:0 24px 22px 24px;">'
+            '<div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;'
+            'color:{};text-align:center;line-height:1.6;">{}{}</div>'
+            '</td></tr>'.format(MUTED, esc(text), link))
+
+
 def _footer(event) -> str:
     rows = []
     if event.reply_to:
@@ -366,7 +379,7 @@ def _footer(event) -> str:
 
 def render_html(event, voice, body: str, closing: str = "",
                 brochure: bool = False, full: bool = True,
-                company: str = "") -> str:
+                company: str = "", opt_out_url: str = "") -> str:
     """`body` is the model's personalised prose (greeting included).
 
     `full=False` renders only the prose and the sign-off, which is what a
@@ -378,7 +391,8 @@ def render_html(event, voice, body: str, closing: str = "",
         rows += [_stats(event), _why_partner(event), _offer(event, brochure),
                  _custom_packages(event), _legacy(event), _past_sponsors(event),
                  _cta(event, company), _organisers(event)]
-    rows += [_signoff(event, voice, closing), _footer(event)]
+    rows += [_signoff(event, voice, closing), _footer(event),
+             _opt_out(event, opt_out_url)]
 
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8">'
@@ -396,7 +410,8 @@ def render_html(event, voice, body: str, closing: str = "",
 
 
 def render_text(event, voice, body: str, closing: str = "",
-                brochure: bool = False, full: bool = True) -> str:
+                brochure: bool = False, full: bool = True,
+                opt_out_url: str = "") -> str:
     """The plain-text alternative. Every HTML email needs one: some clients
     show it, some filters score against it, and a text/plain-only message from
     a domain that usually sends multipart looks like a phish."""
@@ -450,4 +465,8 @@ def render_text(event, voice, body: str, closing: str = "",
         tail.append(event.address)
     if tail:
         out.append("\n".join(tail))
+    opt_out = (getattr(event, "opt_out", "") or "").strip()
+    if opt_out:
+        out.append(opt_out + (" You can also use this link: " + opt_out_url
+                              if opt_out_url else ""))
     return "\n\n".join(part for part in out if part and part.strip())

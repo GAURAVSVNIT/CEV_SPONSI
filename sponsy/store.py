@@ -1,6 +1,6 @@
 """Tables, and the rules that are too important to leave to a prompt.
 
-Six rules are enforced by SQLite triggers rather than by agent code:
+Eight rules are enforced by SQLite triggers rather than by agent code:
 
   * no send without a human verdict on the draft
   * declined is permanent
@@ -8,6 +8,8 @@ Six rules are enforced by SQLite triggers rather than by agent code:
   * no draft for a closed prospect
   * no draft to an address that asked us to stop
   * a draft can only be marked sent once
+  * nothing enters the outbox without a human verdict
+  * nothing leaves the outbox for an address on the do-not-contact list
 
 If every line of Python in this repo were wrong, those would still hold.
 """
@@ -130,6 +132,37 @@ CREATE TABLE IF NOT EXISTS do_not_contact (
   created_at TEXT
 );
 
+-- Approved emails waiting for the send-rate policy (sponsy/outbox.py). A
+-- row is the promise "this goes out when pacing allows"; drafts.sent_at is
+-- still the only record that it actually did.
+CREATE TABLE IF NOT EXISTS outbox (
+  id          INTEGER PRIMARY KEY,
+  draft_id    INTEGER NOT NULL UNIQUE REFERENCES drafts(id),
+  prospect_id TEXT REFERENCES prospects(id),
+  to_addr     TEXT,
+  state       TEXT NOT NULL DEFAULT 'queued'
+              CHECK (state IN ('queued','sending','sent','failed','cancelled')),
+  queued_at   TEXT,
+  not_before  TEXT,                     -- UTC ISO; the earliest it may leave
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  message_id  TEXT,                     -- fixed on the first attempt, reused on retry
+  eml         TEXT,
+  channel     TEXT,
+  reason      TEXT,                     -- why it is waiting, or why it stopped
+  last_error  TEXT,
+  updated_at  TEXT,
+  sent_at     TEXT
+);
+
+-- Cross-process leases: `serve` and `web` may both run against one database,
+-- and only one of them may be sending at a time.
+CREATE TABLE IF NOT EXISTS locks (
+  name       TEXT PRIMARY KEY,
+  owner      TEXT,
+  expires_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_outbox_due        ON outbox(state, not_before);
 CREATE INDEX IF NOT EXISTS ix_research_prospect ON research(prospect_id);
 CREATE INDEX IF NOT EXISTS ix_drafts_prospect   ON drafts(prospect_id);
 CREATE INDEX IF NOT EXISTS ix_drafts_pending    ON drafts(verdict) WHERE verdict IS NULL;
@@ -177,6 +210,18 @@ CREATE TRIGGER IF NOT EXISTS trg_send_only_once
 BEFORE UPDATE OF sent_at ON drafts
 WHEN OLD.sent_at IS NOT NULL AND NEW.sent_at IS NOT OLD.sent_at
 BEGIN SELECT RAISE(ABORT, 'draft was already sent'); END;
+
+CREATE TRIGGER IF NOT EXISTS trg_outbox_needs_approval
+BEFORE INSERT ON outbox
+WHEN COALESCE((SELECT verdict FROM drafts WHERE id = NEW.draft_id), '')
+     NOT IN ('approved','edited')
+BEGIN SELECT RAISE(ABORT, 'no queued send without a human verdict'); END;
+
+CREATE TRIGGER IF NOT EXISTS trg_outbox_do_not_contact
+BEFORE UPDATE OF state ON outbox
+WHEN NEW.state = 'sending'
+ AND EXISTS (SELECT 1 FROM do_not_contact WHERE email = lower(trim(NEW.to_addr)))
+BEGIN SELECT RAISE(ABORT, 'address is on the do-not-contact list'); END;
 """
 
 # Columns added after the first release. ensure_schema() adds any that are
@@ -241,6 +286,9 @@ def migrate_draft_kinds(db: Database) -> bool:
             cols = ", ".join(shared)
             db.execute("INSERT INTO drafts_migrate ({}) SELECT {} FROM drafts"
                        .format(cols, cols))
+            # A trigger on another table that reads drafts would make the
+            # RENAME below fail while drafts does not exist; SCHEMA puts it back.
+            db.execute("DROP TRIGGER IF EXISTS trg_outbox_needs_approval")
             db.execute("DROP TABLE drafts")
             db.execute("ALTER TABLE drafts_migrate RENAME TO drafts")
     finally:
@@ -250,7 +298,8 @@ def migrate_draft_kinds(db: Database) -> bool:
 
 
 def ensure_schema(db: Database) -> None:
-    db.executescript(SCHEMA)
+    # One transaction: one sync to disk instead of one per CREATE.
+    db.executescript("BEGIN;\n" + SCHEMA + "\nCOMMIT;")
     for table in LATER_COLUMNS:
         _add_later_columns(db, table)
     migrate_draft_kinds(db)
@@ -266,7 +315,14 @@ def ensure_schema(db: Database) -> None:
 
 
 def import_csv(db: Database, path: str | Path) -> dict:
-    """Upsert prospects. Contact details are refreshed; state never is."""
+    """Upsert prospects. Contact details are refreshed; state never is.
+
+    A blank cell refreshes nothing: it keeps what the database already has.
+    The addresses that `find-contacts --apply`, `add` and `/add` find are
+    written to the database only, and most rows of the list have an empty
+    email cell, so overwriting with the blank would quietly park every one of
+    them again. To change a value, put the new one in the cell.
+    """
     path = Path(path)
     added = updated = skipped = 0
     problems: list[str] = []
@@ -283,8 +339,11 @@ def import_csv(db: Database, path: str | Path) -> dict:
             try:
                 if existing:
                     db.execute(
-                        "UPDATE prospects SET company=?, contact_name=?, email=?, "
-                        "segment=?, website=COALESCE(NULLIF(?,''), website), "
+                        "UPDATE prospects SET company=?, "
+                        "contact_name=COALESCE(NULLIF(?,''), contact_name), "
+                        "email=COALESCE(NULLIF(?,''), email), "
+                        "segment=COALESCE(NULLIF(?,''), segment), "
+                        "website=COALESCE(NULLIF(?,''), website), "
                         "notes=COALESCE(NULLIF(?,''), notes) WHERE id=?",
                         (company, row.get("contact_name", ""), row.get("email", ""),
                          row.get("segment", ""), row.get("website", ""),
@@ -392,6 +451,9 @@ def due_today(db: Database, today: date, limit: int = 10) -> list[Prospect]:
           AND (p.next_touch IS NULL OR p.next_touch <= ?)
           AND NOT EXISTS (SELECT 1 FROM drafts d
                           WHERE d.prospect_id = p.id AND d.verdict IS NULL)
+          -- ...and so is an approved email still waiting in the outbox.
+          AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.prospect_id = p.id
+                          AND o.state IN ('queued','sending'))
           AND NOT EXISTS (SELECT 1 FROM do_not_contact dnc
                           WHERE dnc.email = lower(trim(p.email)))
         ORDER BY p.priority ASC, (p.next_touch IS NULL) DESC,
@@ -436,6 +498,8 @@ def sweep_cold(db: Database, today: date) -> list[str]:
             if db.one("SELECT 1 FROM drafts WHERE prospect_id=? AND verdict IS NULL",
                       (row["id"],)):
                 continue                       # a draft is still awaiting a verdict
+            if has_queued_send(db, row["id"]):
+                continue                       # an approved email has not left yet
             set_status(db, row["id"], "cold")
             set_next_touch(db, row["id"], None)
             gone.append(row["id"])
@@ -472,11 +536,41 @@ def mark_never(db: Database, pid: str, reason: str = "marked never by a human") 
 
 
 def awaiting_contact(db: Database) -> list[str]:
-    """Prospects parked because nobody has found an address for them yet."""
+    """Prospects parked because nobody has found a usable address for them:
+    none at all, or one that bounced."""
     return [r["id"] for r in db.query(
-        "SELECT id FROM prospects WHERE trim(COALESCE(email,'')) = '' "
-        "AND status NOT IN ('declined','cold','interested') "
-        "ORDER BY priority ASC, id ASC")]
+        "SELECT p.id FROM prospects p WHERE "
+        "(trim(COALESCE(p.email,'')) = '' OR EXISTS (SELECT 1 FROM do_not_contact d "
+        " WHERE d.email = lower(trim(p.email)) AND d.reason LIKE 'bounce%')) "
+        "AND p.status NOT IN ('declined','cold','interested') "
+        "ORDER BY p.priority ASC, p.id ASC")]
+
+
+def bounced(db: Database, pid: str, email: str, reason: str,
+            return_touch: bool = True) -> dict:
+    """A hard bounce: block the address, stop the ladder, and -- when the
+    only email this prospect ever got was the one that bounced -- give the
+    touch back, so a corrected address starts at touch 1 instead of a
+    "following up on my last email" to someone who never saw it.
+
+    `reason` should start with "bounce" so awaiting_contact can tell a dead
+    address from a person who asked us to stop."""
+    prospect = get(db, pid)
+    email = (email or "").strip().lower()
+    block_email(db, email, reason)
+    if prospect is None:
+        return {"cancelled": 0, "reset": False}
+    cancelled = cancel_pending(db, pid, "address bounced")
+    set_next_touch(db, pid, None)
+    reset = False
+    if (return_touch and prospect.touches == 1
+            and (prospect.email or "").strip().lower() == email):
+        db.execute("UPDATE prospects SET touches=0, first_touch=NULL, last_touch=NULL, "
+                   "thread_id=NULL, gmail_thread_id=NULL WHERE id=?", (pid,))
+        reset = True
+    db.log_action(None, "bounce", pid, {"email": email, "reason": reason,
+                                        "touch_returned": reset}, confidence=1.0)
+    return {"cancelled": cancelled, "reset": reset}
 
 
 # ---------------------------------------------------------------------------
@@ -689,15 +783,38 @@ def supersede_draft(db: Database, old_id: int, new_id: int | None = None) -> Non
 
 
 def cancel_pending(db: Database, pid: str, reason: str = "prospect closed") -> int:
-    """Drop drafts still waiting for a verdict. Called when a reply closes the
-    prospect -- otherwise a stale card sits in Telegram waiting to be tapped."""
+    """Drop drafts still waiting for a verdict, and approved emails still
+    waiting in the outbox. Called when a reply closes the prospect --
+    otherwise a stale card sits in Telegram waiting to be tapped, or a
+    "just following up" leaves an hour after they said no."""
     rows = db.query("SELECT id FROM drafts WHERE prospect_id=? AND verdict IS NULL",
                     (pid,))
     for row in rows:
         db.execute("UPDATE drafts SET verdict='skipped' WHERE id=?", (row["id"],))
         db.log_action(None, "cancel_draft", pid,
                       {"draft": row["id"], "reason": reason})
+    return len(rows) + cancel_queued(db, pid, reason)
+
+
+def cancel_queued(db: Database, pid: str, reason: str) -> int:
+    """Outbox rows for this prospect that have not started sending."""
+    rows = db.query("SELECT id, draft_id FROM outbox WHERE prospect_id=? "
+                    "AND state='queued'", (pid,))
+    for row in rows:
+        db.execute("UPDATE outbox SET state='cancelled', reason=?, updated_at=? "
+                   "WHERE id=? AND state='queued'", (reason, utcnow(), row["id"]))
+        db.log_action(None, "cancel_send", pid,
+                      {"draft": row["draft_id"], "reason": reason})
     return len(rows)
+
+
+def has_queued_send(db: Database, pid: str) -> bool:
+    return db.one("SELECT 1 FROM outbox WHERE prospect_id=? AND state IN "
+                  "('queued','sending')", (pid,)) is not None
+
+
+def queued_send(db: Database, draft_id: int) -> sqlite3.Row | None:
+    return db.one("SELECT * FROM outbox WHERE draft_id=?", (draft_id,))
 
 
 # ---------------------------------------------------------------------------
@@ -774,7 +891,10 @@ def stats(db: Database) -> dict:
     drafts = {(row["verdict"] or "pending"): row["n"] for row in db.query(
         "SELECT verdict, COUNT(*) n FROM drafts GROUP BY verdict")}
     sent = db.one("SELECT COUNT(*) n FROM drafts WHERE sent_at IS NOT NULL")
+    outbox = {row["state"]: row["n"] for row in db.query(
+        "SELECT state, COUNT(*) n FROM outbox GROUP BY state")}
     return {"prospects": counts, "drafts": drafts, "sent": sent["n"] if sent else 0,
+            "outbox": outbox,
             "blocked": (db.one("SELECT COUNT(*) n FROM do_not_contact")
                         or {"n": 0})["n"],
             "awaiting_contact": awaiting_contact(db),

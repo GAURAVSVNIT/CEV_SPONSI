@@ -1,0 +1,28 @@
+# Caddy in front of `python run.py web` (or the compose `web` service).
+# Caddy gets and renews the HTTPS certificate on its own.
+#
+#   1. Point a DNS A record (e.g. sponsy.yourclub.org) at this server.
+#   2. Put that name below and set PUBLIC_URL=https://sponsy.yourclub.org
+#      in .env, then restart sponsy so new emails carry the link.
+#   3. sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#
+# Only the unsubscribe link and the health check are public. The UI and its
+# API stay off the internet even though they need a token: reach them with
+#   ssh -L 8765:127.0.0.1:8765 you@server   ->   http://127.0.0.1:8765
+sponsy.example.org {
+	encode gzip
+
+	@public path /u/* /healthz
+	handle @public {
+		reverse_proxy 127.0.0.1:8765
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}

@@ -24,20 +24,20 @@ from .message import (ATTACH_KINDS, attachment_for, attachment_problem,
                       build_message, mailto_url, to_clipboard, write_eml)
 from .smtp import send_smtp
 
-__all__ = ["deliver", "test_send", "build_message", "mailto_url", "write_eml",
+__all__ = ["deliver", "prepare", "transmit", "test_send", "build_message", "mailto_url", "write_eml",
            "to_clipboard", "send_smtp", "GmailClient", "GmailNotConfigured",
            "RawMail", "attachment_for", "attachment_problem", "ATTACH_KINDS"]
 
 
-def deliver(cfg, event, voice, prospect, subject: str, body: str, kind: str,
+def prepare(cfg, event, voice, prospect, subject: str, body: str, kind: str,
             today: date | None = None, in_reply_to: str | None = None,
-            thread_id: str | None = None) -> dict:
-    """Build, persist, then send through the resolved provider.
+            references: list[str] | None = None,
+            message_id: str | None = None) -> tuple:
+    """Build the message and write its .eml. (msg, eml_path, result-dict).
 
-    Returns {message_id, channel, eml, mailto, thread_id, copied, attached,
-    error?, attach_error?}. `channel` is what really happened: a configured
-    provider that failed reports "manual" plus an `error`, and the clipboard
-    gets the text so the sender can paste it into their own client.
+    `message_id` pins the Message-ID: a retry from the outbox re-sends the
+    same email under the same id, so a receiver that already has it can
+    recognise the duplicate and a reply threads to whichever copy arrived.
     """
     today = today or date.today()
     attachment = attachment_for(cfg, kind)
@@ -46,7 +46,9 @@ def deliver(cfg, event, voice, prospect, subject: str, body: str, kind: str,
         # Say so, send anyway: a pitch with no PDF beats no pitch.
         attachment = None
     msg = build_message(cfg, event, voice, prospect, subject, body, in_reply_to,
-                        attachment=attachment, kind=kind)
+                        attachment=attachment, kind=kind, references=references)
+    if message_id:
+        msg.replace_header("Message-ID", message_id)
     eml = write_eml(cfg, msg, prospect, kind, today)
     result: dict = {"message_id": msg["Message-ID"], "eml": str(eml),
                     "mailto": mailto_url(prospect, subject, body),
@@ -54,6 +56,44 @@ def deliver(cfg, event, voice, prospect, subject: str, body: str, kind: str,
                     "attached": attachment.name if attachment else None}
     if attach_error:
         result["attach_error"] = attach_error
+    return msg, eml, result
+
+
+def transmit(cfg, msg, to_addr: str, thread_id: str | None = None) -> dict:
+    """Hand one built message to the resolved provider. RAISES on failure:
+    deliver() turns that into the manual fallback, the outbox into a retry,
+    a pause or a bounce depending on what the error says."""
+    provider = cfg.resolved_mail_provider()
+    if not (to_addr or "").strip():
+        raise ValueError("no email address to send to")
+    if provider == "gmail_api":
+        out = GmailClient(cfg).authorize(interactive=False).send(msg, thread_id=thread_id)
+        return {"channel": "gmail_api", "thread_id": out.get("thread_id"),
+                "gmail_id": out.get("gmail_id")}
+    if provider == "smtp":
+        send_smtp(cfg, msg)
+        return {"channel": "smtp", "thread_id": None}
+    raise ValueError("mail provider is {}; nothing to transmit".format(provider))
+
+
+def deliver(cfg, event, voice, prospect, subject: str, body: str, kind: str,
+            today: date | None = None, in_reply_to: str | None = None,
+            thread_id: str | None = None,
+            references: list[str] | None = None) -> dict:
+    """Build, persist, then send through the resolved provider.
+
+    Returns {message_id, channel, eml, mailto, thread_id, copied, attached,
+    error?, attach_error?}. `channel` is what really happened: a configured
+    provider that failed reports "manual" plus an `error`, and the clipboard
+    gets the text so the sender can paste it into their own client.
+
+    This is the immediate path: the manual channel, a dry run, an address
+    held by SEND_ONLY_TO, and `test-mail`. Real sends to prospects go
+    through sponsy.outbox, which paces them and retries on its own.
+    """
+    msg, eml, result = prepare(cfg, event, voice, prospect, subject, body, kind,
+                               today=today, in_reply_to=in_reply_to,
+                               references=references)
     if cfg.dry_run:
         # A dry run leaves the machine alone entirely: no provider and no
         # clipboard (the tests run this way and must not clobber yours).
@@ -73,16 +113,8 @@ def deliver(cfg, event, voice, prospect, subject: str, body: str, kind: str,
     try:
         if provider in ("gmail_api", "smtp") and not to_addr:
             raise ValueError("prospect {} has no email address".format(prospect.id))
-        if provider == "gmail_api":
-            out = GmailClient(cfg).authorize(interactive=False).send(
-                msg, thread_id=thread_id)
-            result["channel"] = "gmail_api"
-            result["thread_id"] = out.get("thread_id")
-            result["gmail_id"] = out.get("gmail_id")
-            return result
-        if provider == "smtp":
-            send_smtp(cfg, msg)
-            result["channel"] = "smtp"
+        if provider in ("gmail_api", "smtp"):
+            result.update(transmit(cfg, msg, to_addr, thread_id=thread_id))
             return result
     except Exception as exc:
         # You already approved this email. Losing it because the mail server

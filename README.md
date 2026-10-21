@@ -15,7 +15,7 @@ blacklisted. So: **nothing is sent without a human verdict, and the gate is in
 the database, not in the prompt.** The daily run stops at "here is a draft". A
 person taps a button. Only then does an email exist.
 
-If every line of Python in this repo were wrong, these six SQLite triggers in
+If every line of Python in this repo were wrong, these SQLite triggers in
 `sponsy/store.py` would still hold the line:
 
 | Rule | Enforced by |
@@ -26,10 +26,13 @@ If every line of Python in this repo were wrong, these six SQLite triggers in
 | No draft for a closed prospect | `trg_no_draft_when_closed` (declined, cold, interested) |
 | No draft to an address that asked us to stop | `trg_no_draft_do_not_contact` |
 | A draft can only be sent once | `trg_send_only_once` |
+| Nothing enters the outbox without a human verdict | `trg_outbox_needs_approval` |
+| Nothing leaves the outbox for a blocked address | `trg_outbox_do_not_contact` - an address blocked (a "stop" reply, a bounce, [Never]) after approval is refused at the last moment |
 
 Two more rules live in code: one live card per prospect (`due_today` skips
-anyone with a draft still waiting for a verdict), and the Telegram bot ignores
-every chat except the one in `TELEGRAM_CHAT_ID`.
+anyone with a draft still waiting for a verdict, or an approved email still
+in the outbox), and the Telegram bot ignores every chat except the one in
+`TELEGRAM_CHAT_ID`.
 
 ---
 
@@ -50,6 +53,12 @@ python run.py --db data/demo.db verdict d:1:send  # approve one
 python run.py --db data/demo.db status            # ladder state, run history
 ```
 
+Or see the same queue in a browser, with buttons:
+
+```bash
+python run.py web --demo                          # http://127.0.0.1:8765
+```
+
 `verdict d:1:send` writes an `.eml` into `data/outbox/` and prints a `mailto:`
 link. Nothing leaves the machine: with no mail provider configured, delivery is
 "manual" and you send it yourself. The ladder still schedules the next touch.
@@ -61,7 +70,7 @@ link. Nothing leaves the machine: with no mail provider configured, delivery is
 Copy `.env.example` to `.env`. Fill in the pieces below, in order. Each one is
 independent; `python run.py doctor` tells you which are working.
 
-1. **Telegram** (the entire frontend).
+1. **Telegram** (the phone frontend; `python run.py web` is the browser one).
    Open Telegram, talk to `@BotFather`, `/newbot`, copy the token into
    `TELEGRAM_BOT_TOKEN`. Then send your new bot any message (it cannot message
    you first). Run `python run.py doctor`: it reads that message and prints your
@@ -116,7 +125,10 @@ independent; `python run.py doctor` tells you which are working.
 5. **`data/event.yml`** - copy `data/event.example.yml`. The drafter asserts
    every line in that file as fact, and the verifier treats those facts as
    grounded by construction. So if a number in there is not true, it will end up
-   in an email. It is gitignored because it carries a phone number.
+   in an email. It is gitignored because it carries a phone number. The
+   example also fills the HTML email's fixed blocks (stats, what we offer,
+   past sponsors, organisers, contacts), and `past_sponsors` decides who gets
+   the welcome-back first email instead of a cold one.
 
 6. **`data/voice.yml`** - copy `data/voice.example.yml`. This is what makes the
    emails sound like you and not like a model: your greeting, your exact
@@ -169,13 +181,18 @@ python run.py run --limit 1                # researches, drafts, posts the card
 # tap Send in Telegram -- it lands in your own inbox, brochure and all
 ```
 
-Then swap `SMTP_USER` / `SMTP_FROM` to the club address (or set up the Gmail
-API for it), clear `SEND_ONLY_TO`, and delete the test prospect.
+Then swap `SMTP_USER` / `SMTP_FROM` and `IMAP_USER` / `IMAP_PASSWORD` to the
+club address (or set up the Gmail API for it), point `reply_to` in
+`event.yml` at that same inbox, clear `SEND_ONLY_TO`, and delete the test
+prospect. `reply_to` becomes the `Reply-To` header: aim it anywhere the bot
+does not read and replies never reach it, so the ladder keeps nudging people
+who already answered.
 
 8. **`python run.py doctor`** is the gate. It checks every secret live: the
    Telegram token and chat, the model key with one tiny call, the search
-   provider, the mail channel, reply polling, and both YAML files. Do not start
-   a live run until it is clean.
+   provider, the mail channel, reply polling (including that `reply_to` is the
+   inbox it polls), and both YAML files. Do not start a live run until it is
+   clean.
 
 ---
 
@@ -193,9 +210,13 @@ whoever is due. It runs at most once per calendar day unless you pass
 `--force`. Every draft ends up as a Telegram card.
 
 `serve` long-polls Telegram so the card buttons and the `/commands` work the
-moment you tap them. Run it on a laptop, a Raspberry Pi, a free VM, or in
+moment you tap them, sends the outbox at the paced rate (below), and with
+`--daily 09:30` (or `DAILY_RUN_AT` in `.env`) runs the daily job itself, so a
+server needs no cron. Run it on a laptop, a Raspberry Pi, a free VM, or in
 Docker (`docker compose up -d`) - anything that stays on and can reach
-Telegram. On Windows, `scripts\serve.bat` does it; register that with Task
+Telegram. **For a server, follow [deploy/README.md](deploy/README.md)**:
+Docker or systemd, the Gmail token on a headless box, the HTTPS unsubscribe
+link, health checks and backups. On Windows, `scripts\serve.bat` does it; register that with Task
 Scheduler "at log on" if you want it permanent.
 
 `drain` is for cron-only setups with no process running: it applies the
@@ -207,7 +228,10 @@ start of the morning run.
 
 - Windows Task Scheduler: Create Basic Task > Daily at 10:00 > Start a program
   > `E:\path\to\SPONSY_BOT\scripts\run.bat` (first argument is `--limit`,
-  default 5). `scripts\doctor.bat` is a double-clickable health check.
+  default 5). `scripts\doctor.bat` is a double-clickable health check. The
+  scripts use `.venv\Scripts\python.exe` when it exists (`python -m venv .venv`,
+  then `.venv\Scripts\pip install -r requirements.txt`), which sidesteps the
+  Microsoft Store `python` alias on a fresh Windows install.
 - GitHub Actions: `.github/workflows/daily.yml` runs at 10:00 IST and keeps the
   database in the Actions cache between runs. Add the model, Telegram, Tavily
   and (optionally) IMAP keys as repository secrets, plus `SPONSY_EVENT_B64` /
@@ -218,6 +242,95 @@ start of the morning run.
   before you tap: if the CI run drains a Send verdict first, it resolves to
   manual delivery (an `.eml` in the run artifact, nothing actually sent) and
   the draft is marked sent.
+
+---
+
+## Staying out of spam
+
+Receivers judge a sender on four things: whether the domain authenticates
+(SPF, DKIM, DMARC), whether it sends like a person (no bursts, a gradual
+ramp), whether its list is clean (bounces), and whether recipients want the
+mail (spam reports). SPONSY handles the parts that are code:
+
+- **Paced sending.** With a real provider, [Send] puts the email in an
+  outbox. It leaves at once if a slot is free, otherwise at the next one, and
+  the card says when. The defaults are at most 20 a day, a warm-up from 8 a
+  day, 90 s+ between sends, and weekdays 09:00-18:00. The caps are in `.env`
+  (`SEND_*`).
+- **Bounces stop the ladder.** A domain that cannot receive mail is skipped
+  before drafting (one DNS lookup). A bounce report is recognised in code, and
+  the address is blocked and its follow-ups cancelled. If the bounced email
+  was the only one sent, its touch is given back. If more than 5% of the
+  week's mail bounces, sending pauses itself.
+- **Failures are read, not retried blindly.** "Slow down" (421, 4.7.28, 429)
+  pauses everything for as long as the provider asked. "Spam" or
+  "unauthenticated" (5.7.x) and broken credentials pause until you `/resume`.
+  "No such user" is treated as a bounce. A network blip retries 2, 4, 8 ...
+  minutes later with the same bytes and the same `Message-ID`.
+- **An easy way out.** Every email has a `List-Unsubscribe` header and a
+  polite opt-out line (`opt_out` in event.yml). With `PUBLIC_URL` set, it
+  also carries a signed RFC 8058 one-click link that Gmail turns into its own
+  Unsubscribe button. Unsubscribing is far cheaper for your reputation than a
+  spam report.
+- **Follow-ups thread under the first email** (`In-Reply-To`, `References`,
+  `Re: <first subject>`) instead of arriving as new cold emails.
+- **Warnings before you tap.** The card flags fake `Re:`, link shorteners,
+  ALL-CAPS, salesy phrases and too many links. `doctor` checks your domain's
+  SPF, DKIM, DMARC and MX, the template's size (Gmail clips HTML over 102 KB),
+  and the pacing settings.
+
+What it deliberately does not do: rotate domains, hide text, track opens,
+shorten links, or probe mailboxes. Receivers treat each of these as a spam
+signal. The DNS records you need, and Google Postmaster Tools, are in
+[deploy/README.md](deploy/README.md#1-dns-for-your-sending-domain).
+
+`/outbox`, `/pause`, `/resume` and `/cancel N` in Telegram, the Activity tab
+on the web page, and `python run.py outbox [--wait|--pause|--resume]` all show
+and steer the queue. The manual channel and `--dry-run` skip the outbox:
+nothing leaves the machine, so there is nothing to pace.
+
+---
+
+## The web UI
+
+```bash
+python run.py web            # http://127.0.0.1:8765  (--open to launch a browser)
+python run.py web --demo     # offline, on data/demo.db with the frozen fixtures
+```
+
+The same approval queue as Telegram, plus the parts a phone is bad at:
+
+- **Queue** - every draft waiting for a verdict, with the numbers the card
+  shows (words, claims traced to sources, human-score, the brochure) and the
+  claims it made, each marked traced or not, and any spam-filter risk in the
+  wording. Send, Edit (rewrite it in place; the before/after pair becomes a
+  correction the drafter learns from), Redo (say what should change), Skip,
+  Never. Send asks first and says what will actually happen: a real email
+  (now, or at its paced slot), a held `.eml` under `SEND_ONLY_TO`, or a manual
+  `.eml` when no provider is set up.
+- **Prospects** - the list with status, ladder position and next touch;
+  search, filter (including "Needs address", which counts bounced addresses),
+  add one, export a CSV. Click a row for everything SPONSY knows about them:
+  the research summary, every draft and its verdict (or its outbox slot), the
+  replies and bounces, the pages it read, and the audit log.
+- **Activity** - the outbox (what is waiting, when it goes out, sent today
+  against the cap, bounces this week; Pause, Resume, Send what is due, Cancel
+  one), every email sent and what came back, and the run history.
+- **Agent** - the daily run, Discover (pick which companies to add), Find
+  addresses (pick which candidate to keep) and the doctor, with live output.
+
+It is not a second set of rules. Every button goes through the same
+`approvals.apply_verdict` the terminal and Telegram use, so the triggers gate
+it identically, and when Telegram is configured a card you decide on here is
+rewritten in place in the chat. Verdicts are disabled while an agent task is
+running. Run it next to `serve` if you like; they share the database.
+
+It binds to `127.0.0.1` and refuses requests addressed to any other host
+name. To reach it from another machine (or from Docker:
+`docker compose --profile web up -d`), set `SPONSY_WEB_TOKEN` and pass
+`--host 0.0.0.0`; it will not listen beyond loopback without one, because
+this page can send email. Standard library only: no new dependencies, no
+build step. On Windows, `scripts\web.bat` starts it and opens a browser.
 
 ---
 
@@ -359,9 +472,11 @@ of this without a mailbox.
 
 `data/prospects.csv` is the list. Columns: `prospect_id`, `company` (both
 required), `contact_name`, `email`, `segment`, `status`, `website`, `notes`.
-Re-importing refreshes contact details and never resets state. Rows with no
-email address are parked: the agent will not spend model quota researching
-someone it cannot write to, and `status` lists who is waiting on an address.
+Re-importing refreshes contact details and never resets state; a blank cell
+keeps what the database already has, so an address `find-contacts --apply` or
+`add` found survives a re-import of the list. Rows with no email address are
+parked: the agent will not spend model quota researching someone it cannot
+write to, and `status` lists who is waiting on an address.
 
 ```bash
 python run.py discover                    # who sponsors events like ours?
@@ -393,7 +508,11 @@ even if a provider is configured).
 | `doctor` | check every secret and integration live; prints your Telegram chat id |
 | `demo [--limit N]` | offline end-to-end run on the frozen fixtures into `data/demo.db` |
 | `run [--limit N] [--force] [--no-replies] [--fixtures DIR]` | the daily run |
-| `serve [--limit N]` | long-poll Telegram: buttons and `/commands` (`--limit` is the default for `/run`) |
+| `serve [--limit N] [--daily HH:MM]` | long-poll Telegram: buttons and `/commands`, send the outbox, and (with `--daily`) run the daily job at that local time |
+| `outbox [--send] [--wait] [--pause [REASON]] [--resume] [--cancel ID]` | approved emails waiting for a send slot; `--wait` keeps sending at the paced rate until the queue is empty |
+| `backup [--keep N]` | consistent copy of the database to `data/backups/` |
+| `healthcheck [--url URL]` | exit 0 if `serve` wrote its heartbeat recently (or the web server answers `/healthz`) |
+| `web [--host H] [--port N] [--limit N] [--token T] [--demo] [--open]` | the browser UI on localhost: queue, prospects, activity, agent |
 | `drain` | apply verdicts tapped in Telegram since the last pass, then exit |
 | `pending` | drafts waiting for a verdict, with the verdict command for each |
 | `verdict d:ID:send\|skip\|never\|edit\|redo [--text ...]` | approve from the terminal (`--text` is the rewrite for `edit` or the instruction for `redo`) |
@@ -434,7 +553,7 @@ sponsy/
   config.py                .env loader; Config, Event (event.yml), Voice (voice.yml)
   state.py                 SQLite wrapper; runs / actions / memory (the audit log)
   models.py                Prospect, Excerpt, Research, Draft, ReplyEvent; status machine
-  store.py                 sponsorship tables, the six triggers, all queries
+  store.py                 sponsorship tables, the eight triggers, all queries
   ladder.py                touch timing (0/3/7/14, cold 21), 4-touch cap
   tools.py                 provider-neutral tool registry
   agent.py                 run_agent() tool loop + structured() one-shot JSON
@@ -447,12 +566,20 @@ sponsy/
   humanize.py              AI-tell lint + rewrite pass
   verify.py                checklist, grounded(), greeting check, confidence
   replies.py               classification + status transitions; Gmail/IMAP transports
-  mail/                    deliver(), message building, gmail_api.py, smtp.py
+  mail/                    deliver()/prepare()/transmit(), message building, gmail_api.py,
+                           smtp.py; pacing.py (send-rate policy), dns.py (MX, SPF, DKIM,
+                           DMARC over DoH), bounces.py, errors.py (what a failure means),
+                           spamcheck.py
+  outbox.py                approved emails, sent at the paced rate; retries, pauses, recovery
+  unsubscribe.py           List-Unsubscribe headers and the signed one-click link
+  runtime.py               SIGTERM handling, heartbeat, the daily schedule, backups
   telegram.py              Bot API client, console fallback
   approvals.py             verdict routing, drain()/serve(), slash-commands, chat allowlist
   approve.py               card formatting, buttons, send/edit/redo/skip/never
   job.py                   SponsorshipJob: gather -> act -> verify -> report
   doctor.py                live checks of every integration and secret
+  web.py                   browser UI: JSON API over http.server, same verdict path
+  static/                  the page: index.html, app.js, style.css (no build step)
   cli.py                   subcommands
   fakes.py                 offline model stubs
 data/
@@ -467,6 +594,7 @@ evals/run_evals.py         frozen-source eval harness
 scripts/*.bat              run / serve / doctor for Task Scheduler
 .github/workflows/daily.yml
 Dockerfile, docker-compose.yml
+deploy/                    server guide, Caddyfile, systemd units, container entrypoint
 ```
 
 ---

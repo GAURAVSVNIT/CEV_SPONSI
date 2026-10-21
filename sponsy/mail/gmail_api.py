@@ -257,6 +257,21 @@ class GmailClient:
         return {"message_id": msg["Message-ID"], "gmail_id": resp.get("id"),
                 "thread_id": resp.get("threadId")}
 
+    def find_sent(self, message_id: str) -> dict | None:
+        """{id, threadId} of a message in Sent with this Message-ID, or None.
+
+        How the outbox recovers from a crash between "handed to Gmail" and
+        "recorded as sent": it asks Gmail instead of guessing, so an email
+        that did leave is not sent twice and one that did not is not lost.
+        """
+        mid = (message_id or "").strip().strip("<>")
+        if not mid:
+            return None
+        listing = self.service.users().messages().list(
+            userId="me", q="in:sent rfc822msgid:{}".format(mid), maxResults=1).execute()
+        found = listing.get("messages") or []
+        return found[0] if found else None
+
     def list_replies(self, since: date, limit: int = 40) -> list[RawMail]:
         """Inbox mail from other people since `since`, oldest first.
 

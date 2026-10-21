@@ -5,21 +5,27 @@
     python run.py demo                    offline end-to-end run, no keys needed
     python run.py run [--limit N]         the daily run
     python run.py serve                   Telegram: tap buttons, use /commands
+    python run.py serve --daily 09:30     ...and run the daily job itself (servers)
+    python run.py web [--demo]            the same queue in a browser, on localhost
     python run.py pending                 drafts waiting for a verdict
     python run.py verdict d:3:send        approve from the terminal
+    python run.py outbox [--wait]         approved emails waiting for their slot
+    python run.py backup                  a consistent copy of the database
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
 from . import approvals, store
 from .config import DATA, Config, Event, Voice
-from .llm import QuotaExhausted, build_llm
+from .llm import LLMError, QuotaExhausted, build_llm
 from .models import Excerpt
 from .state import Database
 from .telegram import build_notifier
@@ -95,7 +101,38 @@ def print_status(db: Database, cfg: Config) -> None:
         cfg.resolved_llm_provider(), cfg.resolved_search_provider(),
         cfg.resolved_mail_provider(), cfg.resolved_replies_provider(),
         "on" if cfg.telegram_enabled else "off"))
+    print_outbox(db, cfg, brief=True)
     print()
+
+
+def print_outbox(db: Database, cfg: Config, brief: bool = False) -> None:
+    from . import outbox  # noqa: PLC0415
+    info = outbox.status(cfg, db)
+    print("\noutbox: {} today of {} allowed{} | {} queued | bounces this week: {} "
+          "of {} sent".format(
+              info["sent_today"], info["cap_today"],
+              " (warm-up day {})".format(info["warmup_day"])
+              if info["cap_today"] < info["daily_cap"] else "",
+              len(info["queued"]), info["bounces_7d"], info["sends_7d"]))
+    if info["paused"]:
+        print("  PAUSED: {}{}".format(info["paused"]["reason"],
+                                     " (until {})".format(info["paused"]["until"])
+                                     if info["paused"]["until"] else
+                                     " -- resume: python run.py outbox --resume"))
+    if not info["paced"]:
+        print("  (mail is {}; approvals are not paced)".format(
+            cfg.resolved_mail_provider() if not cfg.dry_run else "a dry run"))
+    print("  policy: " + info["policy"])
+    if brief:
+        return
+    for row in info["queued"]:
+        print("  #{} d:{} {:<22} {:<10} {}".format(
+            row["id"], row["draft_id"], (row["company"] or "")[:22], row["kind"],
+            outbox.describe_wait(cfg, row)))
+    for row in info["recent"]:
+        print("  #{} d:{} {:<22} {:<10} {}".format(
+            row["id"], row["draft_id"], (row["company"] or "")[:22], row["state"],
+            (row["reason"] or "")[:70]))
 
 
 def print_pending(db: Database) -> None:
@@ -187,6 +224,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("serve", help="long-poll Telegram: buttons and /commands")
     p.add_argument("--limit", type=int, default=5, help="prospects per /run")
+    p.add_argument("--daily", metavar="HH:MM", default="",
+                   help="also run the daily job at this local time (default: "
+                        "DAILY_RUN_AT in .env); a server then needs no cron")
+
+    p = sub.add_parser("healthcheck", help="exit 0 if serve (or --url) is alive")
+    p.add_argument("--url", default="", help="check this web server's /healthz instead")
+    p.add_argument("--max-age", type=int, default=180,
+                   help="seconds since serve's last heartbeat")
+
+    p = sub.add_parser("outbox", help="approved emails waiting for their slot")
+    p.add_argument("--send", action="store_true", help="send whatever is due now")
+    p.add_argument("--wait", action="store_true",
+                   help="keep sending, at the paced rate, until the queue is empty")
+    p.add_argument("--pause", nargs="?", const="paused by hand", metavar="REASON",
+                   help="stop sending until --resume")
+    p.add_argument("--resume", action="store_true")
+    p.add_argument("--cancel", type=int, metavar="ID", help="drop one queued email")
+
+    p = sub.add_parser("backup", help="copy the database to data/backups/")
+    p.add_argument("--keep", type=int, default=14)
+
+    p = sub.add_parser("web", help="browser UI on localhost: queue, prospects, agent")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="anything but loopback needs a token")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--limit", type=int, default=5, help="prospects per run from the page")
+    p.add_argument("--token", default="",
+                   help="required on every API call (default: SPONSY_WEB_TOKEN)")
+    p.add_argument("--demo", action="store_true",
+                   help="offline, on {} with the frozen fixtures".format(DEMO_DB.name))
+    p.add_argument("--open", action="store_true", help="open it in a browser")
 
     p = sub.add_parser("verdict", help="approve from the terminal")
     p.add_argument("data", metavar="d:ID:send|skip|never|edit|redo")
@@ -241,8 +309,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
 
-    offline = args.offline or args.command == "demo"
-    db_path = args.db or (str(DEMO_DB) if args.command == "demo" else None)
+    if args.command == "healthcheck":
+        # Docker runs this every minute: it must not load the model, the event
+        # or anything else that can be slow or broken for unrelated reasons.
+        return _healthcheck(args)
+
+    demo = args.command == "demo" or getattr(args, "demo", False)
+    offline = args.offline or demo
+    db_path = args.db or (str(DEMO_DB) if demo else None)
     cfg = Config.load(offline=offline, dry_run=args.dry_run or None, db_path=db_path)
     today = date.fromisoformat(args.date) if args.date else date.today()
     db = Database(cfg.db_path)
@@ -336,7 +410,7 @@ def main(argv: list[str] | None = None) -> int:
                 cfg.resolved_search_provider()))
             try:
                 leads = prospecting.discover(cfg, llm, event, queries=args.query, db=db)
-            except QuotaExhausted as exc:
+            except LLMError as exc:                # QuotaExhausted is one too
                 print("stopped: {}".format(exc))
                 return 2
             fresh = [x for x in leads if not prospecting.already_known(db, x.company)]
@@ -416,7 +490,35 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "verdict":
             SponsorshipJob(cfg, db, notifier, llm=llm, today=today, force=True,
                            event=event, voice=voice, limit=5, poll_replies=False)
-            print(approvals.apply_verdict(cfg, db, notifier, args.data, args.text))
+            said = approvals.apply_verdict(cfg, db, notifier, args.data, args.text)
+            print(said)
+            if said.startswith("approved; "):
+                print("It is in the outbox. Something has to be running to send it: "
+                      "`python run.py serve`, `web`, or `python run.py outbox --wait`.")
+            return 0
+
+        if args.command == "backup":
+            from . import runtime  # noqa: PLC0415
+            print("wrote " + str(runtime.backup(cfg, db, keep=args.keep)))
+            return 0
+
+        if args.command == "outbox":
+            from . import outbox  # noqa: PLC0415
+            # The handlers are needed for the card edits after a send.
+            SponsorshipJob(cfg, db, notifier, llm=llm, today=None, force=True,
+                           event=event, voice=voice, limit=5, poll_replies=False)
+            if args.pause:
+                outbox.pause(db, args.pause)
+                print("sending paused: " + args.pause)
+            if args.resume:
+                outbox.resume(db)
+                print("sending resumed")
+            if args.cancel:
+                print("cancelled" if outbox.cancel(db, args.cancel)
+                      else "#{} is not waiting in the outbox".format(args.cancel))
+            if args.send or args.wait:
+                _drain_outbox(cfg, db, notifier, event, voice, wait=args.wait)
+            print_outbox(db, cfg)
             return 0
 
         if args.command == "drain":
@@ -426,10 +528,30 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "serve":
+            from . import runtime  # noqa: PLC0415
             job = SponsorshipJob(cfg, db, notifier, llm=llm, today=None, force=True,
                                  event=event, voice=voice, limit=args.limit)
             _register_commands(cfg, db, notifier, llm, event, voice, args.limit)
-            approvals.serve(cfg, db, notifier)
+            daily_at = args.daily or os.environ.get("DAILY_RUN_AT", "")
+            daily = runtime.Daily(daily_at) if daily_at else None
+            if daily:
+                print("[serve] daily run at {:02d}:{:02d} local time".format(
+                    daily.hour, daily.minute))
+            stopper = runtime.Stopper().install()
+            approvals.serve(cfg, db, notifier, should_stop=stopper,
+                            tick=lambda: _serve_tick(cfg, db, notifier, llm, event,
+                                                     voice, args.limit, daily))
+            return 0
+
+        if args.command == "web":
+            from . import web  # noqa: PLC0415
+            frozen: dict = {}
+            if args.demo:
+                frozen, rows = load_fixtures(FIXTURES)
+                seed_prospects(db, rows)
+            app = web.WebApp(cfg, event, voice, limit=args.limit, frozen=frozen,
+                             token=args.token or os.environ.get("SPONSY_WEB_TOKEN", ""))
+            web.serve(app, host=args.host, port=args.port, open_browser=args.open)
             return 0
 
         if args.command in ("run", "demo"):
@@ -453,7 +575,11 @@ def main(argv: list[str] | None = None) -> int:
                 poll_replies=not getattr(args, "no_replies", False))
             try:
                 result = job.run()
-            except QuotaExhausted as exc:
+            except LLMError as exc:
+                # A quota cap, or a model outage that outlasted the retries (a
+                # 503 "high demand"). The job has already marked the run failed
+                # and told Telegram, and a failed run does not count as today's,
+                # so the next run simply tries again. No traceback needed.
                 print("stopped: {}".format(exc))
                 return 2
             if result is None:
@@ -474,6 +600,84 @@ def main(argv: list[str] | None = None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# long-running loops
+# ---------------------------------------------------------------------------
+
+def _serve_tick(cfg, db, notifier, llm, event, voice, limit: int, daily) -> None:
+    """Between two Telegram polls: heartbeat, outbox, and the daily run."""
+    from . import outbox, runtime  # noqa: PLC0415
+    from .job import SponsorshipJob  # noqa: PLC0415
+
+    runtime.heartbeat(cfg)
+    outbox.dispatch(cfg, db, notifier, event, voice)
+    if daily is None or not daily.due(db):
+        return
+    daily.mark(db)
+    try:
+        print("[serve] backup: {}".format(runtime.backup(cfg, db)))
+    except Exception as exc:                       # noqa: BLE001
+        print("[serve] backup failed: {}".format(exc))
+    try:
+        result = SponsorshipJob(cfg, db, notifier, llm=llm, today=None, force=False,
+                                event=event, voice=voice, limit=limit).run()
+        print("[serve] daily run: {}".format(result.summary if result else "skipped"))
+    except LLMError as exc:
+        print("[serve] daily run stopped: {}".format(exc))
+    finally:
+        # The run's job registered its own handlers; re-register a fresh one
+        # so [Redo] keeps calling back into a live job.
+        SponsorshipJob(cfg, db, notifier, llm=llm, today=None, force=True,
+                       event=event, voice=voice, limit=limit)
+
+
+def _healthcheck(args) -> int:
+    from . import runtime  # noqa: PLC0415
+    if args.url:
+        import urllib.request  # noqa: PLC0415
+        try:
+            with urllib.request.urlopen(args.url.rstrip("/") + "/healthz", timeout=8) as r:
+                return 0 if r.status == 200 else 1
+        except Exception as exc:                   # noqa: BLE001
+            print("unhealthy: {}".format(exc))
+            return 1
+    cfg = Config.load(db_path=args.db)
+    age = runtime.heartbeat_age(cfg)
+    if age is None or age > args.max_age:
+        print("unhealthy: last heartbeat {}".format(
+            "never" if age is None else "{:.0f}s ago".format(age)))
+        return 1
+    print("ok: heartbeat {:.0f}s ago".format(age))
+    return 0
+
+
+def _drain_outbox(cfg, db, notifier, event, voice, wait: bool) -> None:
+    """`outbox --send` (one pass) or `--wait` (until nothing is queued)."""
+    from . import outbox  # noqa: PLC0415
+    while True:
+        for out in outbox.dispatch(cfg, db, notifier, event, voice):
+            print("  #{} {}{}".format(out.get("id"), out.get("state"),
+                                     ": " + str(out.get("reason")) if out.get("reason")
+                                     else ""))
+        if not wait:
+            return
+        hold = outbox.paused(db)
+        nxt = db.one("SELECT MIN(not_before) t FROM outbox WHERE state='queued'")["t"]
+        if hold and not hold["until"]:
+            print("paused ({}); resume with --resume".format(hold["reason"]))
+            return
+        if not nxt:
+            return
+        due = outbox._parse(hold["until"] if hold else nxt)
+        delay = max(5.0, min(300.0, (due - outbox._now()).total_seconds()))
+        print("next send in about {:.0f}s; ctrl-c to stop waiting (the queue keeps)"
+              .format(delay))
+        try:
+            time.sleep(delay)
+        except KeyboardInterrupt:
+            return
+
+
+# ---------------------------------------------------------------------------
 # Telegram slash-commands (serve mode)
 # ---------------------------------------------------------------------------
 
@@ -487,6 +691,9 @@ def _register_commands(cfg, db, notifier, llm, event, voice, limit: int) -> None
                 "/discover - find companies that sponsor events like ours\n"
                 "/add Company | email | notes - add a prospect\n"
                 "/never P01 - never contact this prospect again\n"
+                "/outbox - approved emails waiting to go out\n"
+                "/pause, /resume - stop or restart sending\n"
+                "/cancel N - drop outbox email #N before it leaves\n"
                 "/help - this")
 
     def cmd_pending(ctx, args: str) -> str:
@@ -561,9 +768,44 @@ def _register_commands(cfg, db, notifier, llm, event, voice, limit: int) -> None
         return "{} marked declined permanently; {} pending draft(s) cancelled.".format(
             pid, n)
 
+    def cmd_outbox(ctx, args: str) -> str:
+        from . import outbox  # noqa: PLC0415
+        info = outbox.status(cfg, db)
+        lines = ["{} sent today of {} allowed | bounces this week {} of {}".format(
+            info["sent_today"], info["cap_today"], info["bounces_7d"], info["sends_7d"])]
+        if info["paused"]:
+            lines.append("PAUSED: {}".format(info["paused"]["reason"]))
+        for row in info["queued"][:15]:
+            lines.append("#{} {} ({}) {}".format(row["id"], row["company"], row["kind"],
+                                                outbox.describe_wait(cfg, row)))
+        if not info["queued"]:
+            lines.append("nothing waiting.")
+        return "\n".join(lines)
+
+    def cmd_pause(ctx, args: str) -> str:
+        from . import outbox  # noqa: PLC0415
+        outbox.pause(db, args.strip() or "paused from Telegram")
+        return "sending paused; /resume to restart"
+
+    def cmd_resume(ctx, args: str) -> str:
+        from . import outbox  # noqa: PLC0415
+        outbox.resume(db)
+        return "sending resumed"
+
+    def cmd_cancel(ctx, args: str) -> str:
+        from . import outbox  # noqa: PLC0415
+        try:
+            n = int(args.strip().lstrip("#"))
+        except ValueError:
+            return "usage: /cancel 12  (the # from /outbox)"
+        return "cancelled #{}".format(n) if outbox.cancel(db, n) else \
+            "#{} is not waiting in the outbox".format(n)
+
     for name, fn in (("help", cmd_help), ("start", cmd_help), ("pending", cmd_pending),
                      ("status", cmd_status), ("run", cmd_run),
-                     ("discover", cmd_discover), ("add", cmd_add), ("never", cmd_never)):
+                     ("discover", cmd_discover), ("add", cmd_add), ("never", cmd_never),
+                     ("outbox", cmd_outbox), ("pause", cmd_pause),
+                     ("resume", cmd_resume), ("cancel", cmd_cancel)):
         approvals.register_command(name, fn)
 
 

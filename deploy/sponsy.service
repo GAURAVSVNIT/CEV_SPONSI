@@ -1,0 +1,32 @@
+# systemd, for a server without Docker.
+#   sudo useradd --system --create-home --home-dir /opt/sponsy sponsy
+#   sudo -u sponsy git clone <repo> /opt/sponsy/app
+#   sudo -u sponsy python3 -m venv /opt/sponsy/venv
+#   sudo -u sponsy /opt/sponsy/venv/bin/pip install -r /opt/sponsy/app/requirements.txt
+#   sudo cp deploy/sponsy.service deploy/sponsy-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now sponsy sponsy-web
+#   journalctl -u sponsy -f
+[Unit]
+Description=SPONSY sponsorship agent (Telegram, outbox, daily run)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=sponsy
+WorkingDirectory=/opt/sponsy/app
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/sponsy/venv/bin/python run.py serve
+Restart=always
+RestartSec=10
+# serve finishes the email in flight before it exits.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+# Hardening: it only needs to write its own data directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/sponsy/app/data
+
+[Install]
+WantedBy=multi-user.target
