@@ -57,7 +57,7 @@ def sent_mail(monkeypatch, tmp_path):
     record: list[dict] = []
 
     def fake_deliver(cfg, event, voice, prospect, subject, body, kind, today=None,
-                     in_reply_to=None, thread_id=None):
+                     in_reply_to=None, thread_id=None, **_):
         record.append({"to": prospect.email, "subject": subject, "body": body,
                        "kind": kind, "in_reply_to": in_reply_to,
                        "thread_id": thread_id, "today": today})

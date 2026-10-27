@@ -106,12 +106,14 @@ def attach(msg: EmailMessage, path: Path) -> None:
 def build_message(cfg, event, voice, prospect, subject: str, body: str,
                   in_reply_to: str | None = None,
                   attachment: Path | None = None,
-                  kind: str = "initial") -> EmailMessage:
+                  kind: str = "initial",
+                  references: list[str] | None = None) -> EmailMessage:
     """A plain-text EmailMessage ready for any provider.
 
-    `in_reply_to` is the Message-ID of OUR previous email to this prospect
-    (prospect.thread_id); setting In-Reply-To and References makes every
-    follow-up land in the same conversation in their client and in Gmail.
+    `in_reply_to` is the Message-ID of OUR previous email to this prospect;
+    setting In-Reply-To and References makes every follow-up land in the same
+    conversation in their client and in Gmail. `references` is the whole
+    chain, oldest first, when there is more than one earlier email.
 
     `attachment` turns the message into a multipart one. The caller checks
     `attachment_problem` first; a file that cannot be read is skipped here
@@ -128,8 +130,17 @@ def build_message(cfg, event, voice, prospect, subject: str, body: str,
     if event.reply_to:
         msg["Reply-To"] = event.reply_to
     if in_reply_to:
+        chain = [r for r in (references or []) if r and r != in_reply_to]
         msg["In-Reply-To"] = in_reply_to
-        msg["References"] = in_reply_to
+        msg["References"] = " ".join(chain + [in_reply_to])
+    # The way out, in the header Gmail and Outlook turn into their own
+    # "Unsubscribe" button: the alternative to "Report spam". The mailto goes
+    # to the sending account because that is the inbox the reply poll reads.
+    from ..unsubscribe import headers as unsubscribe_headers, url_for  # noqa: PLC0415
+    pid = str(getattr(prospect, "id", "") or "")
+    for name, value in unsubscribe_headers(cfg, pid, sender).items():
+        msg[name] = value
+    opt_out_url = url_for(cfg, pid)
     # multipart/alternative: the plain text first, the designed version second.
     # A client that cannot render HTML still gets a readable email, and a
     # message with no text part scores badly with spam filters.
@@ -142,9 +153,10 @@ def build_message(cfg, event, voice, prospect, subject: str, body: str,
     has_brochure = attachment is not None
     try:
         company = (getattr(prospect, "company", "") or "").strip()
-        text = render_text(event, voice, body, brochure=has_brochure, full=full)
+        text = render_text(event, voice, body, brochure=has_brochure, full=full,
+                           opt_out_url=opt_out_url)
         html_body = render_html(event, voice, body, brochure=has_brochure,
-                                full=full, company=company)
+                                full=full, company=company, opt_out_url=opt_out_url)
     except Exception as exc:          # a template bug must not lose the email
         print("[mail] falling back to plain text: {}".format(exc))
         msg.set_content(body)

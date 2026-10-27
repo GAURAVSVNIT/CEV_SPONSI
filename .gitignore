@@ -13,6 +13,11 @@ data/prospects.local.csv
 # Gmail OAuth client and token
 data/gmail_credentials.json
 data/gmail_token.json
+# signs unsubscribe links; runtime files from `serve`
+data/secret.key
+data/secret.tmp
+data/heartbeat
+data/backups/
 evals/results/
 __pycache__/
 *.pyc

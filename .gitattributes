@@ -1,0 +1,8 @@
+# Files that run inside the Linux container must keep LF endings even when
+# checked out on Windows: "/bin/sh^M: not found" is not a fun first deploy.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.service   text eol=lf
+Caddyfile   text eol=lf
+# Windows helpers stay CRLF.
+*.bat       text eol=crlf

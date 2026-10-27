@@ -303,7 +303,7 @@ def test_the_migration_puts_the_guardrails_back(tmp_path):
 
     after = {r["name"] for r in db.query(
         "SELECT name FROM sqlite_master WHERE type='trigger'")}
-    assert before == after and len(after) == 7
+    assert before == after and len(after) == 9
     assert {r["name"] for r in db.query(
         "SELECT name FROM sqlite_master WHERE type='index' "
         "AND name LIKE 'ix_drafts%'")} == {"ix_drafts_prospect", "ix_drafts_pending"}

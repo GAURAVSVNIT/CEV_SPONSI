@@ -20,7 +20,8 @@ from sponsy.doctor import Check
 from sponsy.llm import QuotaExhausted
 
 NAMES = [".env", "event.yml", "voice.yml", "database", "model", "search",
-         "telegram", "mail", "brochure", "replies", "send gate"]
+         "telegram", "mail", "brochure", "replies", "sender domain", "pacing",
+         "unsubscribe", "email content", "send gate"]
 
 EVENT_YML = """\
 event_name: Example Hackathon
@@ -118,6 +119,20 @@ def test_event_placeholders_are_detected(cfg):
     assert "sender_name" in check.hint
     assert "reply_to" in check.hint
     assert str(cfg.event_path) in check.hint
+
+
+def test_placeholders_inside_list_entries_are_detected(cfg):
+    """team_contacts, organisers and stats are rendered into the email
+    verbatim, so a placeholder there reaches a sponsor like any other."""
+    write_event(cfg.event_path)
+    with cfg.event_path.open("a", encoding="utf-8") as fh:
+        fh.write('team_contacts:\n  - {name: Your Name, phone: "+91 00000 00000"}\n'
+                 'stats:\n  - {value: "100000+", label: website impressions}\n')
+    check = doctor.check_event(cfg)
+    assert not check.ok and not check.optional
+    assert "team_contacts[0].name" in check.hint
+    assert "team_contacts[0].phone" in check.hint
+    assert "stats[0]" not in check.hint, "a real 100000+ is not the example phone"
 
 
 def test_clean_event_passes_and_lists_tiers(cfg):
@@ -572,6 +587,64 @@ def test_replies_imap_login_failure_is_a_fail(cfg, monkeypatch):
     check = doctor.check_replies(cfg, live=True)
     assert not check.ok and "AUTHENTICATIONFAILED" in check.detail
     assert "App Password" in check.hint
+
+
+def test_replies_warn_when_reply_to_is_an_inbox_the_bot_never_reads(cfg, event):
+    """reply_to is the Reply-To header: replies land there, not in IMAP_USER."""
+    cfg.replies_provider = "imap"
+    cfg.imap_user, cfg.imap_password = "me@gmail.com", "app-pw"
+    event.reply_to = "club@svnit.ac.in"
+    check = doctor.check_replies(cfg, live=False, event=event)
+    assert not check.ok and check.optional
+    assert "club@svnit.ac.in" in check.detail
+    assert "me@gmail.com" in check.hint and "reply_to" in check.hint
+
+
+@pytest.mark.parametrize("reply_to", ["me@gmail.com", "Me@Gmail.com",
+                                      "m.e+dotslash@googlemail.com"])
+def test_replies_accept_the_polled_inbox_however_it_is_spelled(cfg, event, reply_to):
+    cfg.replies_provider = "imap"
+    cfg.imap_user, cfg.imap_password = "me@gmail.com", "app-pw"
+    event.reply_to = reply_to
+    check = doctor.check_replies(cfg, live=False, event=event)
+    assert check.ok, check.hint
+
+
+def test_run_checks_compares_reply_to_with_the_polled_inbox(cfg):
+    write_event(cfg.event_path, reply_to="club@svnit.ac.in")
+    cfg.replies_provider = "imap"
+    cfg.imap_user, cfg.imap_password = "me@gmail.com", "app-pw"
+    check = {c.name: c for c in doctor.run_checks(cfg, live=False)}["replies"]
+    assert not check.ok and check.optional
+    assert "club@svnit.ac.in" in check.detail
+
+
+def test_replies_gmail_api_compares_reply_to_with_the_account(cfg, event, tmp_path,
+                                                             monkeypatch):
+    class FakeGmail:
+        def __init__(self, conf):
+            pass
+
+        def authorize(self, interactive=True):
+            assert interactive is False, "doctor must not open a browser"
+            return self
+
+        def profile(self):
+            return {"emailAddress": "me@gmail.com"}
+
+    stub_module(monkeypatch, "sponsy.mail")
+    stub_module(monkeypatch, "sponsy.mail.gmail_api", GmailClient=FakeGmail)
+    cfg.replies_provider = "gmail_api"
+    cfg.gmail_token = tmp_path / "token.json"
+    cfg.gmail_token.write_text("{}", encoding="utf-8")
+    event.reply_to = "club@svnit.ac.in"
+    check = doctor.check_replies(cfg, live=True, event=event)
+    assert not check.ok and check.optional and "me@gmail.com" in check.hint
+    event.reply_to = "me@gmail.com"
+    assert doctor.check_replies(cfg, live=True, event=event).ok
+    event.reply_to = "club@svnit.ac.in"
+    assert doctor.check_replies(cfg, live=False, event=event).ok, \
+        "offline the account is unknown, so there is nothing to compare"
 
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,7 @@ def sent_mail(monkeypatch, tmp_path):
     record: list[dict] = []
 
     def fake_deliver(cfg, event, voice, prospect, subject, body, kind, today=None,
-                     in_reply_to=None, thread_id=None):
+                     in_reply_to=None, thread_id=None, **_):
         record.append({"to": prospect.email, "subject": subject, "body": body,
                        "kind": kind})
         return {"message_id": "<m{}@example.org>".format(len(record)),

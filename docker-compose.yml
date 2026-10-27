@@ -1,14 +1,48 @@
-# docker compose up -d      -> `python run.py serve` stays up, buttons work
+# docker compose up -d                -> `serve`: Telegram buttons, the outbox,
+#                                        and the daily run at DAILY_RUN_AT
+# docker compose --profile web up -d  -> also the browser UI on 127.0.0.1:8765
+#   (needs SPONSY_WEB_TOKEN in .env: inside a container it listens on 0.0.0.0)
 # docker compose run --rm sponsy python run.py doctor
-# docker compose run --rm sponsy python run.py run --limit 3
+# docker compose run --rm sponsy python run.py outbox
 #
-# ./data holds the database, the outbox, event.yml, voice.yml and the Gmail
-# token, so it is the only thing that has to survive a rebuild. Run
-# `python run.py gmail-auth` on the host first: the OAuth flow opens a browser.
+# ./data holds the database, the outbox, event.yml, voice.yml, the Gmail
+# token and the unsubscribe signing key, so it is the only thing that has to
+# survive a rebuild (and the thing to back up: python run.py backup). Run
+# `python run.py gmail-auth` on a machine with a browser first and copy
+# data/gmail_token.json across. Full server guide: deploy/README.md
+x-sponsy: &sponsy
+  build: .
+  image: sponsy:latest
+  env_file: .env
+  volumes:
+    - ./data:/app/data
+  restart: unless-stopped
+  # A real init as PID 1: reaps children and forwards SIGTERM, which serve
+  # and web turn into a clean stop -- after the email in flight is recorded.
+  init: true
+  stop_grace_period: 90s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
 services:
   sponsy:
-    build: .
-    env_file: .env
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
+    <<: *sponsy
+    command: ["python", "run.py", "serve"]
+
+  web:
+    <<: *sponsy
+    profiles: ["web"]
+    command: ["python", "run.py", "web", "--host", "0.0.0.0"]
+    # Loopback only on the host. Put a TLS proxy in front (deploy/Caddyfile)
+    # to publish the unsubscribe link; reach the UI itself over an SSH tunnel.
+    ports:
+      - "127.0.0.1:8765:8765"
+    healthcheck:
+      test: ["CMD", "python", "run.py", "healthcheck", "--url", "http://127.0.0.1:8765"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3

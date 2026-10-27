@@ -271,8 +271,18 @@ def drain(cfg, db: Database, notifier: Notifier, limit: int = 100) -> int:
     return handled
 
 
-def serve(cfg, db: Database, notifier: Notifier, poll: int = 25) -> None:
-    """Long-poll until ctrl-c. One bad update never kills the loop."""
+def serve(cfg, db: Database, notifier: Notifier, poll: int = 25,
+          tick: Callable[[], None] | None = None,
+          should_stop: Callable[[], bool] | None = None) -> None:
+    """Long-poll until ctrl-c (or SIGTERM, which the CLI turns into the same
+    thing). One bad update never kills the loop.
+
+    `tick` runs after every poll -- at most `poll` seconds apart -- and is how
+    a long-lived `serve` also sends the outbox, writes its heartbeat and
+    fires the daily run. A tick that raises is printed and the loop goes on.
+    `should_stop` is checked between polls, so a stop requested while an
+    email was uploading takes effect once it is safely recorded.
+    """
     if not isinstance(notifier, TelegramNotifier):
         raise SystemExit("serve needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID; "
                          "without them use: python run.py verdict d:ID:send")
@@ -284,9 +294,18 @@ def serve(cfg, db: Database, notifier: Notifier, poll: int = 25) -> None:
     print("[approvals] listening{} for chat {} ({} commands; ctrl-c to stop)".format(
         who, notifier.chat_id, len(COMMANDS)))
     try:
-        while True:
+        while not (should_stop and should_stop()):
+            if tick is not None:
+                try:
+                    tick()
+                except KeyboardInterrupt:
+                    raise
+                except Exception as exc:
+                    print("[approvals] tick failed: {}".format(exc))
             try:
                 updates = notifier.get_updates(offset=_offset(db), timeout=poll)
+            except KeyboardInterrupt:
+                raise
             except Exception as exc:
                 print("[approvals] {}".format(exc))
                 time.sleep(5)
@@ -299,4 +318,5 @@ def serve(cfg, db: Database, notifier: Notifier, poll: int = 25) -> None:
                     print("[approvals] update {} failed: {}".format(
                         update.get("update_id"), exc))
     except KeyboardInterrupt:
-        print("\n[approvals] stopped")
+        pass
+    print("\n[approvals] stopped")

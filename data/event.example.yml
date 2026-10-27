@@ -31,14 +31,18 @@ track_record:
   - 9 successful editions completed before DotSlash 10.0
   - DotSlash 9.0 recorded 1,750+ applications from 600+ colleges across 25+ states
   - DotSlash 9.0 achieved 50K+ social media engagements and 100K+ website impressions
+  - DotSlash 9.0 delivered real-world, high-impact problem statements through 24+ hours of continuous innovation and rapid prototyping
+  - DotSlash has served as a launchpad for future founders, engineers and researchers
   - Run with ASHINE Research Park, SVNIT Surat
-  - 36 hours of continuous building, with real-world problem statements
+  - ACM NIT Surat, the student chapter behind DotSlash, was founded in 2005
+  - DotSlash 10.0 runs for 36 hours
 
 # Progress facts the follow-up touches may cite. Keep them true.
 registrations_so_far: 0
 confirmed_sponsors: []
 
-# Sponsorship packages. Amounts are asserted as fact.
+# Sponsorship packages, exactly as ticked in the brochure's grid. Amounts and
+# deliverables are asserted as fact, and the drafter picks from these lists.
 tiers:
   - name: Alpha
     amount: 750
@@ -46,35 +50,69 @@ tiers:
       - access to attendee LinkedIn and GitHub profiles
       - attendee resume book
       - mentor invite and an opening ceremony speech
+      - recognition at the opening ceremony
+      - sponsor shout-outs
+      - bring company representatives
+      - present at the opening ceremony
       - host a workshop
+      - host or sponsor an activity
       - present a challenge and prize
       - judge at the project showcase
+      - speak at the closing ceremony
+      - social media promotion
       - logo on the website, presentations and T-shirts
+      - distribution of promotional items
+      - logo on flyers, posters and signage
+      - logo on the marketing banner
   - name: Beta
     amount: 500
     deliverables:
+      - access to attendee LinkedIn and GitHub profiles
       - attendee resume book
+      - mentor invite and an opening ceremony speech
+      - recognition at the opening ceremony
+      - sponsor shout-outs
+      - bring company representatives
+      - present at the opening ceremony
       - host a workshop
       - present a challenge and prize
       - judge at the project showcase
+      - speak at the closing ceremony
+      - social media promotion
       - logo on the website, presentations and T-shirts
+      - distribution of promotional items
+      - logo on flyers, posters and signage
+      - logo on the marketing banner
   - name: Gamma
     amount: 250
     deliverables:
+      - access to attendee LinkedIn and GitHub profiles
       - attendee resume book
+      - recognition at the opening ceremony
+      - sponsor shout-outs
       - present a challenge and prize
+      - speak at the closing ceremony
+      - social media promotion
       - logo on the website, presentations and T-shirts
+      - distribution of promotional items
+      - logo on the marketing banner
   - name: Delta
     amount: 100
     deliverables:
+      - access to attendee LinkedIn and GitHub profiles
       - attendee resume book
-      - sponsor shout-outs
-      - logo on the website and the marketing banner
+      - recognition at the opening ceremony
+      - social media promotion
+      - distribution of promotional items
+      - logo on the marketing banner
 
 # The sender. voice.yml can override name/role and adds how they write.
 sender_name: Your Name
 sender_role: Sponsorship Lead
 club: ACM, SVNIT Surat
+# This becomes the Reply-To header, so it must be the inbox the bot polls for
+# replies (IMAP_USER, or the Gmail API account) -- point it anywhere else and
+# replies never reach the bot, which keeps nudging people who already answered.
 reply_to: you@example.org
 phone: "+91 00000 00000"
 website: https://www.hackatdotslash.co.in
@@ -86,4 +124,73 @@ website: https://www.hackatdotslash.co.in
 # than invent a change -- an invented one is worse than none.
 #   e.g. "A hardware track with ASHINE's lab, and the prize pool has doubled."
 whats_new: ""
+
+# ---- how the HTML email presents us -----------------------------------------
+# The fixed template around the model's prose (sponsy/mail/render.py). Rendered
+# verbatim, so every line is asserted as fact. Any block left empty simply
+# drops out of the email. Values below are from the sponsorship brochure.
+tagline: Empowering Innovation Together
+stats:
+  - {value: "1,750+", label: applications}
+  - {value: "600+", label: colleges}
+  - {value: "25+", label: states}
+  - {value: "50K+", label: social media engagements}
+stats_note: Figures from DotSlash 9.0
+why_partner:
+  - Showcase your brand to a nationwide audience
+  - Test and promote your technologies with real users
+  - Conduct workshops, mentor sessions, and keynote addresses
+  - Build meaningful industry-academia relationships
+what_we_offer:
+  - title: Talent access
+    detail: The attendee resume book and attendee LinkedIn and GitHub profiles, in every package
+  - title: Engagement
+    detail: Host a workshop, present a challenge and prize, judge the project showcase, or speak at a ceremony
+  - title: Branding
+    detail: Your logo on the website, presentations, T-shirts, flyers, posters, signage and the marketing banner
+  - title: Promotion
+    detail: Social media promotion, sponsor shout-outs and distribution of your promotional items
+custom_packages: >-
+  Let us design a partnership that fits your specific objectives and budget,
+  and maximizes your brand's impact.
+legacy: >-
+  Nine editions in, DotSlash is one of Gujarat's largest hackathons and a
+  launchpad for future founders, engineers and researchers. DotSlash 10.0 is
+  more than a hackathon: it's a movement uniting industry and academia to
+  shape tomorrow's innovators.
+
+# Companies that backed a past edition. Listing one here switches its first
+# email to the "welcome back" variant -- a cold pitch to a company whose logo
+# is already on our site reads as though we forgot -- so keep it complete.
+# Matching ignores case and spacing ("Digital Ocean" finds "DigitalOcean").
+past_sponsors:
+  - GitHub
+  - Devfolio
+  - Polygon
+  - ETHIndia
+  - Aptos
+  - DigitalOcean
+  - Airmeet
+  - Twilio
+  - Mira
+  - Beeceptor
+  - Wolfram
+  - Avadh
+  - Coding Blocks
+  - Rosenfeld
+  - SashiDo
+  - echoAR
+# Image files live in data/logos/ and are embedded in the email, not linked.
+past_sponsors_logo: sponsors.png
+brand_logo: dotslash.png
+organisers:
+  - {name: SVNIT Surat, logo: svnit.png}
+  - {name: ACM NIT Surat, logo: acm.png}
+  - {name: ASHINE Research Park, logo: ashine.png}
+instagram: "@hackatdotslash"
+address: SVNIT Surat, Gujarat, India
+# Named contacts for the footer; when set they replace sender_name + phone.
+# doctor does not check inside this list, so only add real ones:
+#   team_contacts:
+#     - {name: Full Name, phone: "+91 ....."}
 

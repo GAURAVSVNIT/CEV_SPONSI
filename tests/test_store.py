@@ -114,6 +114,33 @@ def test_import_csv_reports_bad_rows_and_duplicates(db, tmp_path):
     assert len(report["problems"]) == 2
 
 
+def test_reimport_keeps_an_address_found_after_the_first_import(db, tmp_path):
+    """find-contacts --apply writes to the database only. The list still has
+    a blank cell, and re-importing it must not park the prospect again."""
+    csv = tmp_path / "p.csv"
+    csv.write_text("prospect_id,company,contact_name,email,segment,notes\n"
+                   "P20,Acme Corp,,,saas,warm\n", encoding="utf-8")
+    store.import_csv(db, csv)
+    store.set_email(db, "P20", "sponsorships@acme.example", contact_name="DevRel team")
+    assert store.import_csv(db, csv)["updated"] == 1
+    row = store.get(db, "P20")
+    assert (row.email, row.contact_name, row.segment, row.notes) == (
+        "sponsorships@acme.example", "DevRel team", "saas", "warm")
+    assert "P20" not in store.awaiting_contact(db)
+
+
+def test_reimport_with_a_new_address_replaces_the_old_one(db, tmp_path):
+    csv = tmp_path / "p.csv"
+    csv.write_text("prospect_id,company,contact_name,email\n"
+                   "P20,Acme Corp,Ana,old@acme.example\n", encoding="utf-8")
+    store.import_csv(db, csv)
+    csv.write_text("prospect_id,company,contact_name,email\n"
+                   "P20,Acme Corp,Ravi,new@acme.example\n", encoding="utf-8")
+    store.import_csv(db, csv)
+    row = store.get(db, "P20")
+    assert (row.email, row.contact_name) == ("new@acme.example", "Ravi")
+
+
 def test_set_email_logs_a_contact_set_action(db, prospect):
     store.set_email(db, "P01", " Hello@Acme.Example ", contact_name="DevRel team",
                     source_url="https://acme.example/sponsors")

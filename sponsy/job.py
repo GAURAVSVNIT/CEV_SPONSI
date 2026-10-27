@@ -104,6 +104,7 @@ class SponsorshipJob:
     # -- gather ------------------------------------------------------------
     def gather(self) -> dict:
         applied = approvals.drain(self.cfg, self.db, self.notifier)
+        self._flush_outbox()
         events = []
         if self.poll_replies and self.cfg.resolved_replies_provider() != "none":
             try:
@@ -134,6 +135,12 @@ class SponsorshipJob:
                         actions.append(action)
                         queued += 1
                         flagged += int(not action["verified"])
+            elif event.label == "bounced":
+                self.notifier.send(
+                    "<b>{}</b>: the email bounced. {}.\n<code>{}</code>\nAdd another "
+                    "address (web page, /add, or find-contacts) to continue.".format(
+                        esc(event.prospect_id), esc(event.action),
+                        esc(event.snippet[:300])))
             elif event.label == "interested":
                 self.notifier.send(
                     "<b>{}</b> replied and sounds interested. Ladder cancelled; "
@@ -145,6 +152,8 @@ class SponsorshipJob:
             # on our past-sponsor list; every later touch is the same either way.
             step = ladder.step_for(self.event, prospect.company, prospect.touches)
             if step is None:
+                continue
+            if self._undeliverable(prospect):
                 continue
             action = self._draft_and_queue(prospect, step.kind)
             if action:
@@ -289,10 +298,66 @@ class SponsorshipJob:
                                             self.voice).score
         return draft
 
+    def _flush_outbox(self) -> None:
+        """Send whatever approved email is due before drafting more. A cron
+        that only runs `run` still drains the outbox this way."""
+        if not self.cfg.paced:
+            return
+        from . import outbox  # noqa: PLC0415
+        try:
+            outbox.dispatch(self.cfg, self.db, self.notifier, self.event, self.voice)
+        except Exception as exc:                    # sending must not stop drafting
+            print("[sponsorship] outbox: {}".format(exc))
+
+    def _undeliverable(self, prospect) -> bool:
+        """Before a model call is spent on it: can this domain receive mail?
+
+        Only positive evidence counts (no such domain, a null MX, no MX and
+        no address). A lookup that fails says nothing and the draft goes
+        ahead. Offline runs never look.
+        """
+        if self.cfg.offline or not getattr(self.cfg, "check_mx", True):
+            return False
+        from .mail import dns  # noqa: PLC0415
+        domain = dns.domain_of(prospect.email)
+        status, why = dns.cached_mail_domain_status(self.db, domain)
+        if status != "none":
+            return False
+        reason = "bounce-risk: {} takes no mail ({})".format(domain, why)
+        store.block_email(self.db, prospect.email, reason)
+        self.db.log_action(self.run_id, "undeliverable", prospect.id,
+                           {"email": prospect.email, "why": why}, confidence=1.0)
+        self.notifier.send(
+            "Not drafting for <b>{}</b> ({}): {} cannot receive email ({}). "
+            "Find another address and it comes back.".format(
+                esc(prospect.company), esc(prospect.id), esc(prospect.email), esc(why)))
+        return True
+
+    @staticmethod
+    def _thread_subject(subject: str) -> str:
+        """'Re: <the first email's subject>', with any Re: already on it
+        removed so a long ladder does not read 'Re: Re: Re:'."""
+        core = subject or ""
+        while core[:3].lower() == "re:":
+            core = core[3:].lstrip()
+        return "Re: " + core
+
     def _post_card(self, prospect, draft: Draft, detail: dict) -> int:
         # What [Send] will attach, decided now so the card can say so before
         # you tap rather than after.
         from .mail import message as message_mod  # noqa: PLC0415
+
+        if draft.kind in ("nudge", "new_angle", "last_touch") and \
+                getattr(self.cfg, "followups_in_thread", True):
+            # The follow-up goes out as a reply in the first email's thread
+            # (outbox.threading_for sets In-Reply-To), so it carries that
+            # thread's subject: Gmail only files a reply into a thread whose
+            # subject matches, and "Re:" on a real reply is just the truth.
+            first = self.db.one(
+                "SELECT subject FROM drafts WHERE prospect_id=? AND sent_at IS NOT NULL "
+                "AND message_id IS NOT NULL ORDER BY sent_at, id LIMIT 1", (prospect.id,))
+            if first and (first["subject"] or "").strip():
+                draft.subject = self._thread_subject(first["subject"])
 
         attachment = message_mod.attachment_for(self.cfg, draft.kind)
         if attachment is not None and not message_mod.attachment_problem(attachment):

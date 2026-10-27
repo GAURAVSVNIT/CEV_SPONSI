@@ -16,8 +16,10 @@ signoff: |
   Your Name
   Sponsorship Lead, ACM SVNIT
 
-# Hard ceiling on body length. 120 is a good default for a cold email.
-max_words: 130
+# Ceiling on the personalised opening the model writes. The HTML template adds
+# the stats, packages, past sponsors and contact details after it, so this is
+# the opening of a proposal, not a whole cold email.
+max_words: 240
 
 # Notes the drafter follows. Write them the way you would brief a friend who
 # is emailing on your behalf.

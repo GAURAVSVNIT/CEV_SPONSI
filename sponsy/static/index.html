@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SPONSY</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="top-inner">
+      <div class="top-row">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">S</span>
+          <span>SPONSY</span>
+          <span class="event-name" id="event-name"></span>
+        </div>
+        <div class="channels" id="channels"></div>
+        <button class="icon-btn" id="theme-toggle" type="button" title="Toggle theme"
+                aria-label="Toggle theme">&#9680;</button>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button class="tab" data-tab="queue" type="button">Queue <span class="count" id="count-queue">0</span></button>
+        <button class="tab" data-tab="prospects" type="button">Prospects <span class="count" id="count-prospects">0</span></button>
+        <button class="tab" data-tab="activity" type="button">Activity</button>
+        <button class="tab" data-tab="agent" type="button">Agent <span class="count hidden" id="count-agent">running</span></button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div id="banners"></div>
+    <section id="view-queue" class="view"></section>
+    <section id="view-prospects" class="view hidden"></section>
+    <section id="view-activity" class="view hidden"></section>
+    <section id="view-agent" class="view hidden"></section>
+  </main>
+
+  <div id="drawer-root"></div>
+  <div id="modal-root"></div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

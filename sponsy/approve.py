@@ -115,7 +115,26 @@ def draft_message(row, detail: dict | None = None) -> str:
     if ("sounds_human" in soft or "sounds_human" in failed) and issues:
         lines.append("reads a bit robotic: " + esc("; ".join(
             str(i) for i in issues[:3])))
+    risks = spam_risks(row)
+    if risks:
+        lines.append("spam-filter risk: " + esc("; ".join(risks[:3])))
     return "\n".join(lines)
+
+
+def spam_risks(row) -> list[str]:
+    """What a spam filter may hold against this draft's wording (a warning,
+    never a gate). A follow-up really is a reply, so its Re: is honest."""
+    from .mail.spamcheck import check  # noqa: PLC0415
+    return check(row["subject"] or "", row["body"] or "", kind=row["kind"],
+                 threaded=row["kind"] in ("nudge", "new_angle", "last_touch",
+                                          "needs_info"))
+
+
+def queued_message(row, wait: str) -> str:
+    """What the card becomes while the email waits in the outbox."""
+    return ("<b>Approved</b> for {} ({}) - {}.\nIt leaves on its own; nothing "
+            "else to tap. /outbox shows the queue.".format(
+                esc(row["email"]), esc(row["prospect_id"]), esc(wait)))
 
 
 def sent_message(row, out: dict, result: dict) -> str:
@@ -185,6 +204,13 @@ def _refusal(ctx, row, today: date) -> str | None:
         return "draft {} is gone".format(draft_id)
     if row["sent_at"]:
         return "already sent"
+    item = store.queued_send(ctx.db, draft_id)
+    if item is not None:
+        if item["state"] in ("queued", "sending"):
+            from . import outbox  # noqa: PLC0415
+            return "already approved; " + outbox.describe_wait(ctx.cfg, item)
+        return "approved earlier, then {}: {}".format(item["state"],
+                                                      item["reason"] or "no reason")
     if row["verdict"] == "superseded":
         return "draft {} was superseded; nothing sent".format(draft_id)
     prospect = store.get(ctx.db, row["prospect_id"])
@@ -218,11 +244,16 @@ def _send(ctx, event, voice, today: date, subject: str | None = None,
     # Lazy so this module imports even while mail/ is missing or broken; the
     # import only matters at the moment a human taps [Send].
     from . import mail as mail_mod  # noqa: PLC0415
+    from . import outbox  # noqa: PLC0415
 
+    if cfg.paced and cfg.may_send_to(prospect.email):
+        return _queue(ctx, event, voice, row, subject, body, changed)
+
+    in_reply_to, references = outbox.threading_for(cfg, db, prospect, row["kind"])
+    extra = {"references": references} if references else {}
     out = mail_mod.deliver(
         cfg, event, voice, prospect, subject, body, row["kind"], today=today,
-        in_reply_to=prospect.thread_id if row["kind"] == "needs_info" else None,
-        thread_id=prospect.gmail_thread_id)
+        in_reply_to=in_reply_to, thread_id=prospect.gmail_thread_id, **extra)
     result = store.mark_sent(db, draft_id, today, message_id=out.get("message_id"),
                              verdict="edited" if changed else "approved",
                              channel=out.get("channel", ""),
@@ -248,6 +279,38 @@ def _send(ctx, event, voice, today: date, subject: str | None = None,
     if channel == "smtp":
         return "sent via smtp"
     return "saved as .eml; send it by hand"
+
+
+def _queue(ctx, event, voice, row, subject: str, body: str, changed: bool) -> str:
+    """A real provider: record the verdict, put the email in the outbox, and
+    let the outbox send it now if the pacing policy allows."""
+    from . import outbox  # noqa: PLC0415
+
+    db, cfg = ctx.db, ctx.cfg
+    draft_id = int(row["id"])
+    db.execute("UPDATE drafts SET subject=?, body=?, verdict=? WHERE id=?",
+               (subject, body, "edited" if changed else "approved", draft_id))
+    if row["action_id"]:
+        db.set_verdict(row["action_id"], "approved")
+    item = outbox.enqueue(cfg, db, draft_id)
+    for out in outbox.dispatch(cfg, db, ctx.notifier, event, voice):
+        if out.get("id") != item["id"]:
+            continue
+        if out.get("state") == "sent":
+            channel = (out.get("out") or {}).get("channel")
+            return {"gmail_api": "sent via gmail", "smtp": "sent via smtp"}.get(
+                channel, "saved as .eml; send it by hand")
+        if out.get("state") in ("cancelled", "failed"):
+            return "not sent: {}".format(out.get("reason") or out.get("kind") or
+                                         out.get("state"))
+    item = store.queued_send(db, draft_id)
+    wait = outbox.describe_wait(cfg, item)
+    hold = outbox.paused(db)
+    if hold:
+        wait = "sending is paused ({}); it waits until that clears".format(
+            hold["reason"][:120])
+    _replace_card(ctx, store.get_draft(db, draft_id), queued_message(row, wait))
+    return "approved; " + wait
 
 
 def _split_subject(text: str, default_subject: str) -> tuple[str, str]:

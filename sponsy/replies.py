@@ -10,6 +10,11 @@ first without the second, and the tests do the same.
 One rule never reaches the model: a message that asks us to stop is declined,
 permanently, and the address goes on the do-not-contact list. A classifier can
 be wrong about tone; it must not be able to be wrong about that.
+
+Bounces never reach it either. A delivery failure report is recognised in
+code (sponsy/mail/bounces.py) and a hard one blocks the address and stops its
+ladder at once: mailing a dead address again is the fastest way to teach
+Gmail that this sender does not keep its list clean.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ import imaplib
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
 
@@ -33,6 +38,7 @@ SEEN_CAP = 500                   # enough for a dozen polls; replies.message_id
                                  # catches anything older
 LAST_UID_KEY = "imap_last_uid"   # memory: highest IMAP uid already looked at
 OOO_PUSH_DAYS = 7
+SOFT_BOUNCE_LIMIT = 3            # this many soft bounces in a fortnight = hard
 
 STOP = re.compile(
     r"\b(unsubscribe|stop contacting|stop emailing|remove me|do not contact|"
@@ -124,12 +130,41 @@ def body_text(message) -> str:
         payload = message.get_payload(decode=True) or b""
         parts.append(payload.decode(message.get_content_charset() or "utf-8",
                                     errors="replace"))
-    text = "\n".join(parts).replace("\r\n", "\n")
+    return strip_quoted("\n".join(parts))
+
+
+def strip_quoted(text: str) -> str:
+    """What the person typed, without the quoted history under it.
+
+    Applied to every transport. It matters more now that our own emails end
+    with an opt-out line: a reply that quotes it back must not read as the
+    person asking us to stop.
+    """
+    text = (text or "").replace("\r\n", "\n")
     cut = QUOTE_MARKER.search(text)
     if cut and cut.start() > 40:          # a reply that is ONLY a quote keeps it
         text = text[:cut.start()]
     text = "\n".join(line for line in text.split("\n") if not line.startswith(">"))
     return re.sub(r"\n{3,}", "\n\n", text).strip()[:2000]
+
+
+def dsn_text(message) -> str:
+    """The machine-readable half of a bounce (message/delivery-status, and
+    X-Failed-Recipients), which body_text skips because it is not text/plain.
+    It names the failed recipient and the status code exactly."""
+    out: list[str] = []
+    failed = message.get("X-Failed-Recipients")
+    if failed:
+        out.append("X-Failed-Recipients: " + str(failed))
+    if message.is_multipart():
+        for part in message.walk():
+            if part.get_content_type() != "message/delivery-status":
+                continue
+            payload = part.get_payload()
+            blocks = payload if isinstance(payload, list) else [payload]
+            for block in blocks:
+                out.append(str(block))
+    return "\n".join(out)
 
 
 def references_of(message) -> list[str]:
@@ -239,6 +274,64 @@ def classify_and_apply(llm, cfg, db, prospect, from_addr: str, subject: str,
 
 
 # ---------------------------------------------------------------------------
+# bounces
+# ---------------------------------------------------------------------------
+
+def _our_addresses(cfg) -> set[str]:
+    return {a.strip().lower() for a in (
+        getattr(cfg, "gmail_sender", ""), getattr(cfg, "smtp_user", ""),
+        getattr(cfg, "smtp_from", ""), getattr(cfg, "imap_user", "")) if a and "@" in a}
+
+
+def _bounced_prospect(db, mail, bounce) -> tuple[str | None, str]:
+    """(prospect id, the address that failed). The thread first, then any
+    failed recipient that is one of our prospects."""
+    pid = store.match_thread(db, list(mail.refs or []), "",
+                             gmail_thread_id=getattr(mail, "thread_id", None))
+    for addr in bounce.recipients:
+        row = db.one("SELECT id FROM prospects WHERE lower(trim(email))=?", (addr,))
+        if row and (pid is None or row["id"] == pid):
+            return row["id"], addr
+    if pid:
+        prospect = store.get(db, pid)
+        return pid, (prospect.email if prospect else "")
+    return None, ""
+
+
+def apply_bounce(db, mail, bounce, pid: str, address: str, uid: str,
+                 run_id: int | None = None) -> ReplyEvent:
+    """Record a delivery failure against its prospect and act on it."""
+    prospect = store.get(db, pid)
+    label = bounce.label
+    if not bounce.hard:
+        since = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat(
+            timespec="seconds")
+        recent = db.one("SELECT COUNT(*) n FROM replies WHERE prospect_id=? AND "
+                        "label='bounce_soft' AND received_at >= ?", (pid, since))["n"]
+        if recent + 1 >= SOFT_BOUNCE_LIMIT:
+            label = "bounced"              # a mailbox that is always full is gone
+    if label == "bounced":
+        status = bounce.status if bounce.status not in bounce.diagnostic else ""
+        why = " ".join(p for p in ("bounce:", status, bounce.diagnostic) if p)
+        out = store.bounced(db, pid, address, why[:300])
+        action = "hard bounce: {} blocked, ladder stopped".format(address or "address")
+        if out.get("reset"):
+            action += "; the touch was given back, so a new address starts at touch 1"
+    else:
+        action = "delivery delayed or refused for now; the provider keeps trying"
+    event = ReplyEvent(prospect_id=pid, message_id=(mail.message_id or "").strip(),
+                       from_addr=mail.from_addr or "", subject=mail.subject or "",
+                       snippet=(bounce.diagnostic or (mail.body or ""))[:400],
+                       label=label, confidence=1.0, extracted_ask=None, action=action)
+    store.record_reply(db, event, uid, action)
+    db.log_action(run_id, "reply_" + label, pid,
+                  {"from": mail.from_addr, "address": address, "status": bounce.status,
+                   "diagnostic": bounce.diagnostic, "action": action},
+                  confidence=1.0, escalated=label == "bounced")
+    return event
+
+
+# ---------------------------------------------------------------------------
 # the per-mail loop, shared by both transports
 # ---------------------------------------------------------------------------
 
@@ -251,6 +344,9 @@ def _handle_mails(llm, cfg, db, mails, today: date, run_id: int | None,
     soon as it has been looked at, whatever happens next: a message that
     fails to classify is logged and left for a human, not retried every day.
     """
+    from .mail import bounces  # noqa: PLC0415
+
+    ours = _our_addresses(cfg)
     events: list[ReplyEvent] = []
     for mail in mails:
         uid = str(mail.uid or "")
@@ -261,6 +357,18 @@ def _handle_mails(llm, cfg, db, mails, today: date, run_id: int | None,
         message_id = (mail.message_id or "").strip()
         if store.seen_message(db, message_id):
             continue
+        bounce = bounces.parse(mail.from_addr or "", mail.subject or "",
+                               mail.body or "", ours=ours)
+        if bounce is not None:
+            pid, address = _bounced_prospect(db, mail, bounce)
+            if pid:
+                try:
+                    events.append(apply_bounce(db, mail, bounce, pid, address, uid,
+                                               run_id=run_id))
+                except Exception as exc:  # noqa: BLE001
+                    print("[sponsorship] bounce {} failed: {}".format(
+                        message_id or uid, exc))
+            continue                       # never classified by the model
         pid = store.match_thread(db, list(mail.refs or []), mail.from_addr or "",
                                  gmail_thread_id=getattr(mail, "thread_id", None))
         if not pid:
@@ -271,8 +379,8 @@ def _handle_mails(llm, cfg, db, mails, today: date, run_id: int | None,
         try:
             events.append(classify_and_apply(
                 llm, cfg, db, prospect, mail.from_addr or "", mail.subject or "",
-                mail.body or "", message_id=message_id, uid=uid, today=today,
-                run_id=run_id))
+                strip_quoted(mail.body or ""), message_id=message_id, uid=uid,
+                today=today, run_id=run_id))
         except Exception as exc:          # one bad message must not eat the rest
             print("[sponsorship] reply {} failed: {}".format(message_id or uid, exc))
             db.log_action(run_id, "reply_error", pid,
@@ -354,7 +462,7 @@ def imap_fetch(cfg, since: date, limit: int = 40, last_uid: int = 0) -> list:
                 message_id=(message.get("Message-ID") or "").strip(),
                 from_addr=parseaddr(message.get("From", ""))[1],
                 subject=_decode(message.get("Subject")),
-                body=body_text(message),
+                body="\n".join(t for t in (body_text(message), dsn_text(message)) if t),
                 refs=references_of(message),
                 thread_id=None,
                 received_at=_received_at(message)))

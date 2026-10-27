@@ -2,8 +2,10 @@
 
     python run.py doctor
 
-Ten checks, in the order a first-time setup fails: files, database, model,
-search, Telegram, mail, replies, and finally a reminder of the send gate.
+The checks run in the order a first-time setup fails: files, database, model,
+search, Telegram, mail, replies, then deliverability -- whether receivers
+can trust the sending domain (SPF, DKIM, DMARC), the pace mail goes out at,
+the unsubscribe path, the email itself -- and a reminder of the send gate.
 Each one is wrapped so a crash inside an integration becomes a FAIL line with
 the message, never a traceback -- the whole point of `doctor` is to be the
 command that still runs when something is broken.
@@ -20,6 +22,7 @@ Secrets are never printed. Key counts, usernames and addresses are.
 from __future__ import annotations
 
 import imaplib
+import re
 import smtplib
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,23 +87,35 @@ def _guard(name: str, fn: Callable[[], Check], optional: bool = False) -> Check:
     return check
 
 
+def _is_placeholder(value: str) -> bool:
+    for marker in PLACEHOLDERS:
+        if marker.isdigit():
+            # The example phone's "00000", not the tail of a real "100000+".
+            if re.search(r"(?<!\d)" + marker, value):
+                return True
+        elif marker in value:
+            return True
+    return False
+
+
 def _placeholders_in(event: Event) -> list[str]:
-    """'field still says X' for every placeholder left in the loaded event."""
-    found: list[str] = []
+    """'field still says X' for every placeholder left in the loaded event,
+    including inside list entries such as team_contacts[0].phone: the email
+    template renders those verbatim too."""
     fields: list[tuple[str, str]] = []
     for key, val in vars(event).items():
         if isinstance(val, str):
             fields.append((key, val))
         elif isinstance(val, list):
-            fields.extend(("{}[{}]".format(key, i), str(x))
-                          for i, x in enumerate(val) if isinstance(x, str))
+            for i, item in enumerate(val):
+                if isinstance(item, str):
+                    fields.append(("{}[{}]".format(key, i), item))
+                elif isinstance(item, dict):
+                    fields.extend(("{}[{}].{}".format(key, i, k), v)
+                                  for k, v in item.items() if isinstance(v, str))
     fields.extend(("tiers[{}].name".format(i), t.name) for i, t in enumerate(event.tiers))
-    for key, val in fields:
-        for marker in PLACEHOLDERS:
-            if marker in val:
-                found.append("{} still says {!r}".format(key, val.strip()[:60]))
-                break
-    return found
+    return ["{} still says {!r}".format(key, val.strip()[:60])
+            for key, val in fields if _is_placeholder(val)]
 
 
 def _chat_ids(updates: Any) -> list[str]:
@@ -508,7 +523,58 @@ def check_mail(cfg: Config, live: bool = True) -> Check:
                  .format(where))
 
 
-def check_replies(cfg: Config, live: bool = True) -> Check:
+def _mailbox(address: str) -> str:
+    """An address reduced to the inbox it lands in: lowercase, no +tag, and
+    Gmail's ignored dots dropped, so R.Fanse+dotslash@gmail.com is
+    rfanse@gmail.com."""
+    local, _, domain = (address or "").strip().lower().rpartition("@")
+    local = local.split("+", 1)[0]
+    if domain in ("gmail.com", "googlemail.com"):
+        local, domain = local.replace(".", ""), "gmail.com"
+    return "{}@{}".format(local, domain) if local and domain else ""
+
+
+def _reply_to_elsewhere(event: Event | None, *inboxes: str) -> str:
+    """event.reply_to, when replies to it cannot land in any inbox we read.
+
+    It is the Reply-To header of every email, so it is where sponsors'
+    answers go. Empty when it matches, and when there is nothing to compare:
+    no event, no reply_to, or an IMAP login that is not an address.
+    """
+    reply_to = (getattr(event, "reply_to", "") or "").strip()
+    ours = {_mailbox(box) for box in inboxes if "@" in (box or "")} - {""}
+    if not reply_to or not ours or _mailbox(reply_to) in ours:
+        return ""
+    return reply_to
+
+
+def _unless_replies_go_elsewhere(check: Check, elsewhere: str, inbox: str) -> Check:
+    """A passing replies check becomes a WARN when reply_to is another inbox:
+    replies never arrive, so a "stop" goes unread and the ladder keeps going."""
+    if not (check.ok and elsewhere):
+        return check
+    return Check(check.name, False,
+                 "{}; but reply_to is {}, so replies go to an inbox this bot never "
+                 "reads".format(check.detail, elsewhere),
+                 "reply_to in event.yml becomes the Reply-To header of every email: "
+                 "set it to {} (move SMTP_*, IMAP_* and reply_to together when you "
+                 "switch addresses); ignore this only if {} forwards into {}".format(
+                     inbox, elsewhere, inbox),
+                 optional=True)
+
+
+def _gmail_account(cfg: Config) -> str:
+    """The authorised Gmail address, or "" -- check_mail reports why not."""
+    try:
+        from .mail.gmail_api import GmailClient  # noqa: PLC0415
+        client = GmailClient(cfg)
+        client.authorize(interactive=False)
+        return (client.profile() or {}).get("emailAddress", "") or ""
+    except Exception:                              # noqa: BLE001
+        return ""
+
+
+def check_replies(cfg: Config, live: bool = True, event: Event | None = None) -> Check:
     provider = cfg.resolved_replies_provider()
     if provider == "none":
         return Check("replies", False, "replies are not polled; feed them in with "
@@ -521,7 +587,14 @@ def check_replies(cfg: Config, live: bool = True) -> Check:
             return Check("replies", False, "gmail_api: no token at {}".format(token),
                          "run `python run.py gmail-auth` once; the same token sends "
                          "and reads")
-        return Check("replies", True, "gmail_api: read-only via {}".format(token))
+        check = Check("replies", True, "gmail_api: read-only via {}".format(token))
+        # Replies are read from the authorised account, which is only known
+        # after a network call; offline there is nothing reliable to compare.
+        account = _gmail_account(cfg) if live and getattr(event, "reply_to", "") else ""
+        if not account:
+            return check
+        return _unless_replies_go_elsewhere(
+            check, _reply_to_elsewhere(event, account, cfg.gmail_sender), account)
 
     # imap
     missing = [name for name, val in (("IMAP_HOST", cfg.imap_host),
@@ -533,16 +606,214 @@ def check_replies(cfg: Config, live: bool = True) -> Check:
                      "and IMAP must be enabled in Gmail settings")
     where = "{} at {}, folder {}".format(cfg.imap_user, cfg.imap_host,
                                          cfg.imap_folder or "INBOX")
+    elsewhere = _reply_to_elsewhere(event, cfg.imap_user)
     if not live:
-        return Check("replies", True, "imap: {}, not tested offline".format(where))
+        return _unless_replies_go_elsewhere(
+            Check("replies", True, "imap: {}, not tested offline".format(where)),
+            elsewhere, cfg.imap_user)
     try:
         count = _imap_login(cfg)
     except Exception as exc:                       # noqa: BLE001
         return Check("replies", False, "imap: " + _short(exc),
                      "use a Gmail App Password, enable IMAP in Gmail settings "
                      "(Settings > Forwarding and POP/IMAP), and check IMAP_FOLDER")
-    return Check("replies", True, "imap: {}, read-only login ok ({} message(s))"
-                 .format(where, count))
+    return _unless_replies_go_elsewhere(
+        Check("replies", True, "imap: {}, read-only login ok ({} message(s))"
+              .format(where, count)), elsewhere, cfg.imap_user)
+
+
+# ---------------------------------------------------------------------------
+# deliverability
+# ---------------------------------------------------------------------------
+
+DKIM_SELECTORS = ("google", "selector1", "selector2", "default", "dkim", "mail",
+                  "k1", "s1", "s2", "smtp")
+
+
+def _expected_spf(cfg: Config) -> str:
+    """The include: a domain needs in its SPF to send through our provider."""
+    provider = cfg.resolved_mail_provider()
+    host = (cfg.smtp_host or "").lower()
+    if provider == "gmail_api" or (provider == "smtp" and host.endswith("gmail.com")):
+        return "_spf.google.com"
+    return ""
+
+
+def check_sender_domain(cfg: Config, event: Event | None = None, live: bool = True,
+                        lookup=None) -> Check:
+    """Can a receiver authenticate mail from our From address?
+
+    Gmail requires SPF or DKIM of every sender and SPF + DKIM + DMARC of bulk
+    senders; Outlook junks unauthenticated mail. A free @gmail.com address
+    is Google's to authenticate, so there is nothing to check there.
+    """
+    from .mail import dns  # noqa: PLC0415
+    from .mail.message import sender_address  # noqa: PLC0415
+
+    if cfg.resolved_mail_provider() == "manual":
+        return Check("sender domain", True, "manual delivery: your own mail client "
+                     "sends, so its account's authentication applies", optional=True)
+    sender = sender_address(cfg, event) if event is not None else (
+        cfg.gmail_sender or cfg.smtp_from or cfg.smtp_user)
+    domain = dns.domain_of(sender)
+    if not domain:
+        return Check("sender domain", False, "no From address to check",
+                     "set GMAIL_SENDER (gmail_api) or SMTP_FROM / SMTP_USER (smtp)",
+                     optional=True)
+    notes = []
+    login = (cfg.smtp_user or "").strip().lower()
+    if cfg.resolved_mail_provider() == "smtp" and login and \
+            dns.domain_of(login) != domain:
+        notes.append("From is @{} but you log in as {}: Gmail rewrites the From "
+                     "unless it is a verified 'Send mail as' alias".format(domain, login))
+    if domain in dns.PROVIDER_DOMAINS:
+        detail = ("{} is a {} address: SPF, DKIM and DMARC are {}'s, and they pass. "
+                  "Fine at this volume; a club domain on Google Workspace gives you "
+                  "your own reputation and DMARC reports".format(
+                      sender, domain, domain.split(".")[0].title()))
+        if notes:
+            return Check("sender domain", False, detail + "; " + "; ".join(notes),
+                         "send from the account you authenticate as", optional=True)
+        return Check("sender domain", True, detail)
+    if not live:
+        return Check("sender domain", True, "{}: not checked offline".format(domain),
+                     optional=True)
+    selectors = [cfg.dkim_selector] + [s for s in DKIM_SELECTORS if s != cfg.dkim_selector]
+    report = dns.check_sender_domain(domain, selectors, _expected_spf(cfg),
+                                     lookup=lookup or dns.query)
+    if report.errors and not (report.spf or report.dkim or report.dmarc):
+        return Check("sender domain", False, "{}: DNS lookups failed ({})".format(
+            domain, "; ".join(report.errors)[:160]),
+            "check this machine's internet access and re-run doctor", optional=True)
+    good = []
+    if report.spf and not report.spf_problem:
+        good.append("SPF ok")
+    if report.dkim:
+        good.append("DKIM '{}'{}".format(report.dkim, " ({}-bit)".format(
+            report.dkim_bits) if report.dkim_bits else ""))
+    if report.dmarc:
+        good.append("DMARC p={}".format(report.dmarc_policy or "?"))
+    problems = report.problems() + notes
+    detail = "{}: {}".format(domain, ", ".join(good) or "nothing authenticates it")
+    if problems:
+        detail += " | " + "; ".join(problems)
+    hint_bits = []
+    if not report.spf or report.spf_problem:
+        hint_bits.append('a TXT record on {} like "v=spf1 include:{} ~all"'.format(
+            domain, _expected_spf(cfg) or "<your provider's SPF host>"))
+    if not report.dkim:
+        hint_bits.append("DKIM: Google Admin > Apps > Gmail > Authenticate email > "
+                         "generate a 2048-bit key and publish it (selector 'google'); "
+                         "set DKIM_SELECTOR if yours differs")
+    if not report.dmarc:
+        hint_bits.append('a TXT record on _dmarc.{} like "v=DMARC1; p=none; '
+                         'rua=mailto:dmarc@{}" (start at p=none, tighten later)'.format(
+                             domain, domain))
+    if not report.mx:
+        hint_bits.append("an MX record so replies and bounces reach you")
+    hint = "add " + "; ".join(hint_bits) if hint_bits else "; ".join(notes)
+    if not report.ok:
+        return Check("sender domain", False, detail, hint + ". Gmail and Outlook junk "
+                     "or reject mail with neither SPF nor DKIM")
+    return Check("sender domain", not problems, detail, hint, optional=True)
+
+
+def check_pacing(cfg: Config) -> Check:
+    """The send-rate policy, and whether its settings parse."""
+    from .mail import pacing  # noqa: PLC0415
+
+    errors = []
+    for fn, value in ((pacing.parse_tz, cfg.send_tz), (pacing.parse_hours, cfg.send_hours),
+                      (pacing.parse_days, cfg.send_days)):
+        try:
+            fn(value)
+        except ValueError as exc:
+            errors.append(str(exc))
+    policy = pacing.Policy.from_cfg(cfg)
+    detail = policy.describe()
+    if not cfg.paced:
+        detail = "not used yet (mail is {}); when it is: {}".format(
+            "a dry run" if cfg.dry_run else cfg.resolved_mail_provider(), detail)
+    if errors:
+        return Check("pacing", False, "; ".join(errors), "fix the value in .env; until "
+                     "then the default is used", optional=True)
+    warn = []
+    if policy.daily_cap > 100:
+        warn.append("SEND_DAILY_CAP={} is far more than a person sends; reputation "
+                    "suffers long before Gmail's own 500/2,000 limit".format(
+                        policy.daily_cap))
+    if policy.min_gap_s < 30:
+        warn.append("SEND_MIN_GAP={}s sends in bursts".format(policy.min_gap_s))
+    if not policy.warmup:
+        warn.append("SEND_WARMUP=0: a new sender going straight to full volume is "
+                    "a classic spam pattern")
+    if warn:
+        return Check("pacing", False, detail + " | " + "; ".join(warn),
+                     "the defaults in .env.example are a safe start", optional=True)
+    return Check("pacing", True, detail)
+
+
+def check_unsubscribe(cfg: Config) -> Check:
+    url = (cfg.public_url or "").strip()
+    if not url:
+        return Check("unsubscribe", False,
+                     "mailto unsubscribe header only; Gmail's one-click unsubscribe "
+                     "needs an https endpoint",
+                     "deploy `web` behind HTTPS and set PUBLIC_URL to its address "
+                     "(see deploy/README.md); every email then carries a signed "
+                     "one-click link", optional=True)
+    if not url.lower().startswith("https://"):
+        return Check("unsubscribe", False, "PUBLIC_URL={} is not https".format(url),
+                     "RFC 8058 one-click needs https; put the web UI behind a TLS "
+                     "proxy (deploy/Caddyfile)", optional=True)
+    return Check("unsubscribe", True, "one-click via {}/u/... plus the mailto "
+                 "header".format(url.rstrip("/")))
+
+
+GMAIL_CLIP_BYTES = 102 * 1024
+
+
+def check_content(cfg: Config, event: Event | None = None,
+                  voice: Voice | None = None) -> Check:
+    """The fixed parts of the email: what every recipient gets around the
+    prose. Gmail clips HTML over ~102 KB, hiding the footer and the way out."""
+    if event is None:
+        return Check("email content", False, "no event.yml to render", optional=True)
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from .mail.message import build_message  # noqa: PLC0415
+    from .mail.spamcheck import URL  # noqa: PLC0415
+
+    sample = SimpleNamespace(id="DOCTOR", company="Example Co", contact_name="Sam",
+                             email="sam@example.com")
+    prose = "Hi Sam,\n\nA paragraph about why we are writing.\n\nThanks"
+    msg = build_message(cfg, event, voice or SimpleNamespace(sender_name="",
+                                                             signoff=""),
+                        sample, "A short subject", prose, kind="initial")
+    html_part = msg.get_body(preferencelist=("html",))
+    html = html_part.get_content() if html_part is not None else ""
+    size = len(html.encode("utf-8"))
+    total = len(bytes(msg))
+    links = sorted(set(URL.findall(html)))
+    plain = [u for u in links if u.lower().startswith("http://")]
+    problems = []
+    if size > GMAIL_CLIP_BYTES:
+        problems.append("the HTML is {:.0f} KB; Gmail clips over 102 KB, hiding the "
+                        "footer and the opt-out line".format(size / 1024))
+    if plain:
+        problems.append("http:// links in the template: {}".format(", ".join(plain[:3])))
+    if not (getattr(event, "opt_out", "") or "").strip():
+        problems.append("opt_out is empty in event.yml, so the email has no visible "
+                        "way out (recipients use 'Report spam' instead)")
+    if "List-Unsubscribe" not in msg:
+        problems.append("no List-Unsubscribe header (no From address?)")
+    detail = "first email: {:.0f} KB HTML, {:.0f} KB with images and attachment, " \
+             "{} distinct link(s)".format(size / 1024, total / 1024, len(links))
+    if problems:
+        return Check("email content", False, detail + " | " + "; ".join(problems),
+                     "trim the event.yml blocks or the images; use https links",
+                     optional=True)
+    return Check("email content", True, detail)
 
 
 def check_send_gate(cfg: Config) -> Check:
@@ -554,6 +825,9 @@ def check_send_gate(cfg: Config) -> Check:
                  "`python run.py verdict d:ID:send`); a database trigger refuses "
                  "a send with no recorded verdict")
     parts.append("every approved email is written to {} first".format(cfg.outbox))
+    if cfg.paced:
+        parts.append("approved emails leave through the outbox at the paced rate "
+                     "(python run.py outbox)")
     if cfg.send_only_to:
         parts.append("SEND_ONLY_TO is set, so [Send] only reaches {} -- "
                      "every other address is held as an .eml (clear it "
@@ -595,7 +869,13 @@ def run_checks(cfg: Config, event: Event | None = None, voice: Voice | None = No
     checks.append(_guard("telegram", lambda: check_telegram(cfg, live)))
     checks.append(_guard("mail", lambda: check_mail(cfg, live)))
     checks.append(_guard("brochure", lambda: check_brochure(cfg)))
-    checks.append(_guard("replies", lambda: check_replies(cfg, live)))
+    checks.append(_guard("replies", lambda: check_replies(cfg, live, event)))
+    checks.append(_guard("sender domain",
+                         lambda: check_sender_domain(cfg, event, live), optional=True))
+    checks.append(_guard("pacing", lambda: check_pacing(cfg), optional=True))
+    checks.append(_guard("unsubscribe", lambda: check_unsubscribe(cfg), optional=True))
+    checks.append(_guard("email content", lambda: check_content(cfg, event, voice),
+                         optional=True))
     checks.append(_guard("send gate", lambda: check_send_gate(cfg), optional=True))
     return checks
 
